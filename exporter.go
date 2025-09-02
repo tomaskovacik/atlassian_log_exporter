@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/m1keru/go-atlassian/admin"
@@ -100,13 +104,45 @@ func parseFlags() Config {
 }
 
 func initCloudAdmin(config Config) (*admin.Client, error) {
-	cloudAdmin, err := admin.New(nil)
+	// Create a custom HTTP client with a transport that can capture response bodies
+	httpClient := &http.Client{
+		Transport: &responseBodyCapturingTransport{
+			Transport: http.DefaultTransport,
+		},
+	}
+
+	cloudAdmin, err := admin.New(httpClient)
 	if err != nil {
 		return nil, err
 	}
 	cloudAdmin.Auth.SetBearerToken(config.APIToken)
 	cloudAdmin.Auth.SetUserAgent(config.APIUserAgent)
 	return cloudAdmin, nil
+}
+
+// Custom transport to capture response bodies
+type responseBodyCapturingTransport struct {
+	Transport http.RoundTripper
+}
+
+func (t *responseBodyCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.Transport.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+
+	// Capture the response body if it's an error response
+	if resp.StatusCode >= 400 {
+		bodyBytes, bodyErr := io.ReadAll(resp.Body)
+		if bodyErr == nil {
+			// Create a new response with the captured body
+			resp.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+			// Log the response body for debugging
+			fmt.Printf("DEBUG: HTTP %d Response Body: %s\n", resp.StatusCode, string(bodyBytes))
+		}
+	}
+
+	return resp, err
 }
 
 func fetchEvents(ctx context.Context, cloudAdmin *admin.Client, config Config, startTime time.Time, log *zap.SugaredLogger) ([]*models.OrganizationEventPageScheme, error) {
@@ -122,13 +158,35 @@ func fetchEvents(ctx context.Context, cloudAdmin *admin.Client, config Config, s
 		}
 
 		events, response, err := cloudAdmin.Organization.Events(ctx, config.OrgID, opts, cursor)
-		log.Debugf("Request HTTP: %v", response.Request)
+		if response != nil {
+			log.Debugf("Request HTTP: %v", response.Request)
+		}
+
 		if err != nil {
-			if response != nil && response.Code == 429 {
-				retryAfter := handleRateLimitExceeded(response, log)
-				time.Sleep(time.Duration(retryAfter) * time.Second)
-				continue
+			if response != nil {
+				log.Debugf("Response HTTP Code: %d", response.Code)
+				log.Debugf("Response Headers: %v", response.Header)
+
+				// Try to read response body for error details
+				if response.Body != nil {
+					bodyBytes, bodyErr := io.ReadAll(response.Body)
+					if bodyErr != nil {
+						log.Debugf("Error reading response body: %v", bodyErr)
+					} else {
+						log.Debugf("Response Body: %s", string(bodyBytes))
+					}
+				}
+
+				if response.Code == 429 {
+					retryAfter := handleRateLimitExceeded(response, log)
+					time.Sleep(time.Duration(retryAfter) * time.Second)
+					continue
+				}
 			}
+			// Log the full error details
+			log.Debugf("Full error details: %+v", err)
+			log.Debugf("Error type: %T", err)
+			log.Debugf("Error string: %s", err.Error())
 			return nil, err
 		}
 
