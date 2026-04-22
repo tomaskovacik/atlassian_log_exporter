@@ -1,10 +1,11 @@
 # Atlassian Admin API Event Log Exporter
 
-This Go application fetches events from the Atlassian Admin API, processes them, and logs the results. It supports pagination, rate limiting, and state persistence.
+This Go application fetches events from the Atlassian Admin API or the Bitbucket workspace audit log, processes them, and logs the results. It supports pagination, rate limiting, and state persistence.
 
 ## Features
 
-- Fetches events from the Atlassian Admin API
+- Fetches events from the Atlassian Admin API (organisation-level audit log)
+- Fetches events from the Bitbucket Cloud workspace audit log
 - Supports custom date ranges for event retrieval
 - Handles API rate limiting
 - Logs events to console and optionally to a file
@@ -14,8 +15,8 @@ This Go application fetches events from the Atlassian Admin API, processes them,
 ## Prerequisites
 
 - Go 1.x or higher
-- Atlassian Admin API Token
-- Atlassian Organization ID
+- **Admin source**: Atlassian Admin API Token and Organisation ID
+- **Bitbucket source**: Bitbucket username, app password, and workspace slug
 
 ## Installation
 
@@ -53,38 +54,79 @@ Run the application with the following command:
 
 ### Flags
 
-- `-api_user_agent`: API User Agent (default "curl/7.54.0")
-- `-api_token`: Atlassian Admin API Token (can also be set via ATLASSIAN_ADMIN_API_TOKEN environment variable)
-- `-from`: (Optional) From date (RFC3339 format)
-- `-org_id`: Organization ID (can also be set via ATLASSIAN_ORGID environment variable)
+#### Common flags
+
+- `-source`: Log source — `admin` (default) or `bitbucket`
+- `-api_user_agent`: API User Agent (default `"curl/7.54.0"`)
+- `-from`: (Optional) From date in RFC3339 format; overrides saved state
 - `-log-to-file`: (Optional) Enable logging to file
-- `-log-file`: (Optional) Path to log file (default "log.txt")
+- `-log-file`: (Optional) Path to log file (default `"log.txt"`)
 - `-debug`: Enable debug mode
-- `-query`: Query to filter the events
-- `-sleep`: Sleep time in milliseconds between requests (default 200)
+- `-query`: Query string to filter events
+- `-sleep`: Sleep time in milliseconds between paginated requests (default `200`)
+
+#### Admin source flags
+
+- `-api_token`: Atlassian Admin API Token (env: `ATLASSIAN_ADMIN_API_TOKEN`)
+- `-org_id`: Organisation ID (env: `ATLASSIAN_ORGID`)
+
+#### Bitbucket source flags
+
+- `-workspace`: Bitbucket workspace slug (env: `BITBUCKET_WORKSPACE`)
+- `-bb-username`: Bitbucket username for basic auth (env: `BITBUCKET_USERNAME`)
+- `-bb-app-password`: Bitbucket app password for basic auth (env: `BITBUCKET_APP_PASSWORD`)
 
 ### Environment Variables
 
-- `ATLASSIAN_ADMIN_API_TOKEN`: Atlassian Admin API Token
-- `ATLASSIAN_ORGID`: Atlassian Organization ID
+| Variable                    | Description                              |
+|-----------------------------|------------------------------------------|
+| `ATLASSIAN_ADMIN_API_TOKEN` | Atlassian Admin API Token (admin source) |
+| `ATLASSIAN_ORGID`           | Atlassian Organisation ID (admin source) |
+| `BITBUCKET_WORKSPACE`       | Bitbucket workspace slug                 |
+| `BITBUCKET_USERNAME`        | Bitbucket username                       |
+| `BITBUCKET_APP_PASSWORD`    | Bitbucket app password                   |
 
-## Example
+## Examples
+
+### Atlassian Admin API (default)
 
 ```sh
 ./atlassian_log_exporter -api_token=your_api_token -org_id=your_org_id -from=2023-09-01T00:00:00Z -log-to-file -debug
 ```
 
-or
+or using environment variables:
 
 ```sh
 ATLASSIAN_ADMIN_API_TOKEN=123 ATLASSIAN_ORGID=123-123-123 ./atlassian_log_exporter
 ```
 
-This command will fetch events from September 1, 2023, log the results to both console and file, and enable debug mode.
+### Bitbucket workspace audit log
+
+```sh
+./atlassian_log_exporter \
+  -source=bitbucket \
+  -workspace=my-workspace \
+  -bb-username=my-user \
+  -bb-app-password=my-app-password \
+  -from=2023-09-01T00:00:00Z \
+  -debug
+```
+
+or using environment variables:
+
+```sh
+BITBUCKET_WORKSPACE=my-workspace \
+BITBUCKET_USERNAME=my-user \
+BITBUCKET_APP_PASSWORD=my-app-password \
+./atlassian_log_exporter -source=bitbucket
+```
 
 ## State Persistence
 
-The application saves the timestamp of the last processed event in a file named `jira_state.json`. This allows the application to resume from where it left off in subsequent runs.
+The application saves the timestamp of the last processed event so it can resume from where it left off in subsequent runs:
+
+- **Admin source**: `atlassian_state.json`
+- **Bitbucket source**: `bitbucket_state.json`
 
 ## Error Handling
 
@@ -92,7 +134,7 @@ The application handles various error scenarios, including API rate limiting. Wh
 
 ## Logging
 
-Logs are output to the console by default. If the `-log-to-file` flag is set, logs will also be written to the specified file (default: "log.txt").
+Logs are output to the console by default. If the `-log-to-file` flag is set, logs will also be written to the specified file (default: `log.txt`).
 
 ## Contributing
 
@@ -101,3 +143,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 Apache License Version 2.0, January 2004
+
