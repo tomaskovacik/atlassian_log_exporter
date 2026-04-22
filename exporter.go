@@ -68,11 +68,16 @@ func initLogger(debug bool, logToFile bool, logFilePath string) *zap.SugaredLogg
 	cores := []zapcore.Core{consoleCore}
 
 	if logToFile {
-		fileEncoder := zapcore.NewJSONEncoder(config)
-		logFile, _ := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		fileWriter := zapcore.AddSync(logFile)
-		fileCore := zapcore.NewCore(fileEncoder, fileWriter, level)
-		cores = append(cores, fileCore)
+		logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			// Fall back to console-only logging if the file cannot be opened.
+			fmt.Fprintf(os.Stderr, "Failed to open log file %s: %v; logging to console only\n", logFilePath, err)
+		} else {
+			fileEncoder := zapcore.NewJSONEncoder(config)
+			fileWriter := zapcore.AddSync(logFile)
+			fileCore := zapcore.NewCore(fileEncoder, fileWriter, level)
+			cores = append(cores, fileCore)
+		}
 	}
 
 	core := zapcore.NewTee(cores...)
@@ -103,11 +108,12 @@ func parseFlags() Config {
 	return config
 }
 
-func initCloudAdmin(config Config) (*admin.Client, error) {
+func initCloudAdmin(config Config, log *zap.SugaredLogger) (*admin.Client, error) {
 	// Create a custom HTTP client with a transport that can capture response bodies
 	httpClient := &http.Client{
 		Transport: &responseBodyCapturingTransport{
 			Transport: http.DefaultTransport,
+			log:       log,
 		},
 	}
 
@@ -123,6 +129,7 @@ func initCloudAdmin(config Config) (*admin.Client, error) {
 // Custom transport to capture response bodies
 type responseBodyCapturingTransport struct {
 	Transport http.RoundTripper
+	log       *zap.SugaredLogger
 }
 
 func (t *responseBodyCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -135,10 +142,9 @@ func (t *responseBodyCapturingTransport) RoundTrip(req *http.Request) (*http.Res
 	if resp.StatusCode >= 400 {
 		bodyBytes, bodyErr := io.ReadAll(resp.Body)
 		if bodyErr == nil {
-			// Create a new response with the captured body
+			// Create a new response with the captured body so it can be read again
 			resp.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-			// Log the response body for debugging
-			fmt.Printf("DEBUG: HTTP %d Response Body: %s\n", resp.StatusCode, string(bodyBytes))
+			t.log.Debugf("HTTP %d Response Body: %s", resp.StatusCode, string(bodyBytes))
 		}
 	}
 
@@ -153,7 +159,6 @@ func fetchEvents(ctx context.Context, cloudAdmin *admin.Client, config Config, s
 		opts := &models.OrganizationEventOptScheme{
 			Q:      config.Query,
 			From:   startTime,
-			To:     time.Time{}.UTC(),
 			Action: "",
 		}
 
@@ -255,7 +260,7 @@ func main() {
 
 	ctx := context.Background()
 
-	stateFilename := "jira_state.json"
+	stateFilename := "atlassian_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
 		log.Errorf("Error loading state: %v. Starting from beginning.", err)
@@ -272,7 +277,7 @@ func main() {
 		}
 	}
 
-	cloudAdmin, err := initCloudAdmin(config)
+	cloudAdmin, err := initCloudAdmin(config, log)
 	if err != nil {
 		log.Fatal(err)
 	}
