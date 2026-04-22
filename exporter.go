@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m1keru/go-atlassian/admin"
-	"github.com/m1keru/go-atlassian/bitbucket"
-	"github.com/m1keru/go-atlassian/pkg/infra/models"
+	"github.com/ctreminiom/go-atlassian/admin"
+	"github.com/ctreminiom/go-atlassian/bitbucket"
+	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
