@@ -3,7 +3,7 @@ module atlassian_log_exporter
 go 1.25.0
 
 require (
-	github.com/m1keru/go-atlassian v1.6.2
+	github.com/ctreminiom/go-atlassian v1.6.1
 	go.uber.org/zap v1.27.0
 )
 
