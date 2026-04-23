@@ -106,6 +106,34 @@ Run the application with the following command:
 | `ATLASSIAN_EMAIL`           | Atlassian account email (jira/confluence)|
 | `ATLASSIAN_TOKEN`           | Atlassian personal API token (jira/confluence)|
 
+## Required Token Scopes / Permissions
+
+### Admin source — Atlassian Admin API Token
+
+The API token must be a **service account API key** created in [Atlassian Admin](https://admin.atlassian.com) with the following OAuth scope granted:
+
+| Scope | Description |
+|-------|-------------|
+| `read:audit-log:admin` | Read organisation-level audit log events |
+
+The token owner must have the **Organisation Admin** role in the Atlassian organisation.
+
+### Bitbucket source — App Password
+
+The Bitbucket [App Password](https://bitbucket.org/account/settings/app-passwords/) must have the following permission enabled:
+
+| Permission category | Required permission |
+|---------------------|---------------------|
+| Workspace | `Audit logs: Read` |
+
+### Jira source — Personal API Token
+
+Jira uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Jira Administrator** global permission (`Administer Jira`) on the target site, as the audit log API is restricted to site administrators.
+
+### Confluence source — Personal API Token
+
+Confluence uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Confluence Administrator** (or **System Administrator**) global permission on the target site, as the audit log API is restricted to site administrators.
+
 ## Examples
 
 ### Atlassian Admin API (default)
