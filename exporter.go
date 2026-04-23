@@ -752,7 +752,7 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 
 		if err != nil {
 			if response != nil && response.Code == 429 {
-				retryAfter := handleBitbucketRateLimit(response, log)
+				retryAfter := handleRateLimitExceeded(response, log)
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
