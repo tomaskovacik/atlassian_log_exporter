@@ -360,16 +360,26 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				locationIP = event.Attributes.Location.IP
 			}
 
+			var actorLink string
+			if event.Attributes.Actor != nil && event.Attributes.Actor.Links != nil {
+				actorLink = event.Attributes.Actor.Links.Self
+			}
+
+			var eventLink string
+			if event.Links != nil {
+				eventLink = event.Links.Self
+			}
+
 			log.Debugf("Event: %v", event.Attributes.Container)
 			log.Info(
 				"Event ID:", event.ID,
 				", Event Time:", event.Attributes.Time,
 				", Event Actor ID:", event.Attributes.Actor.ID,
 				", Event Actor Name:", event.Attributes.Actor.Name,
-				", Event Actor Link:", event.Attributes.Actor.Links.Self,
+				", Event Actor Link:", actorLink,
 				", Event Action:", event.Attributes.Action,
 				", Event Target:", locationIP,
-				", Event Link:", event.Links.Self,
+				", Event Link:", eventLink,
 			)
 		}
 	}
