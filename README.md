@@ -12,7 +12,7 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 - Handles API rate limiting
 - Logs events to console and optionally to a file
 - Persists the last processed event date to resume from where it left off
-- Configurable via command-line flags and environment variables
+- Configurable via command-line flags, environment variables, or a YAML configuration file
 
 ## Prerequisites
 
@@ -60,6 +60,7 @@ Run the application with the following command:
 
 #### Common flags
 
+- `-config`: (Optional) Path to a YAML configuration file
 - `-source`: Log source — `admin` (default), `bitbucket`, `jira`, or `confluence`
 - `-api_user_agent`: API User Agent (default `"curl/7.54.0"`)
 - `-from`: (Optional) From date in RFC3339 format; overrides saved state
@@ -133,6 +134,49 @@ Jira uses Basic Auth (email + [personal API token](https://id.atlassian.com/mana
 ### Confluence source — Personal API Token
 
 Confluence uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Confluence Administrator** (or **System Administrator**) global permission on the target site, as the audit log API is restricted to site administrators.
+
+## Configuration File
+
+All settings can be provided via a YAML file instead of (or in addition to) CLI flags and environment variables. The configuration is applied in the following priority order (highest wins):
+
+1. **CLI flags** (highest priority)
+2. **YAML config file**
+3. **Environment variables**
+4. **Built-in defaults** (lowest priority)
+
+Copy `config.yaml.example` to `config.yaml`, fill in the required values, and pass it with `-config`:
+
+```sh
+./atlassian_log_exporter -config config.yaml
+```
+
+CLI flags override anything set in the file:
+
+```sh
+./atlassian_log_exporter -config config.yaml -debug
+```
+
+### YAML keys
+
+| Key               | CLI flag             | Environment variable        | Description |
+|-------------------|----------------------|-----------------------------|-------------|
+| `source`          | `-source`            | —                           | Log source (`admin`, `bitbucket`, `jira`, `confluence`) |
+| `api_user_agent`  | `-api_user_agent`    | —                           | HTTP User-Agent header |
+| `from`            | `-from`              | —                           | Start date (RFC3339) |
+| `sleep`           | `-sleep`             | —                           | Sleep (ms) between requests |
+| `debug`           | `-debug`             | —                           | Enable debug logging |
+| `query`           | `-query`             | —                           | Filter query |
+| `log_to_file`     | `-log-to-file`       | —                           | Write logs to file |
+| `log_file`        | `-log-file`          | —                           | Log file path |
+| `api_token`       | `-api_token`         | `ATLASSIAN_ADMIN_API_TOKEN` | Admin API token |
+| `org_id`          | `-org_id`            | `ATLASSIAN_ORGID`           | Atlassian organisation ID |
+| `workspace`       | `-workspace`         | `BITBUCKET_WORKSPACE`       | Bitbucket workspace slug |
+| `bb_username`     | `-bb-username`       | `BITBUCKET_USERNAME`        | Bitbucket username |
+| `bb_app_password` | `-bb-app-password`   | `BITBUCKET_APP_PASSWORD`    | Bitbucket app password |
+| `jira_url`        | `-jira-url`          | `JIRA_URL`                  | Jira site URL |
+| `confluence_url`  | `-confluence-url`    | `CONFLUENCE_URL`            | Confluence site URL |
+| `atlassian_email` | `-atlassian-email`   | `ATLASSIAN_EMAIL`           | Atlassian account email |
+| `atlassian_token` | `-atlassian-token`   | `ATLASSIAN_TOKEN`           | Atlassian personal API token |
 
 ## Examples
 

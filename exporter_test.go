@@ -417,3 +417,133 @@ func TestFetchBitbucketEventsDateFilter(t *testing.T) {
 	}
 }
 
+// ---------- loadYAMLConfig ----------
+
+func TestLoadYAMLConfig_AllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+api_user_agent: myagent/1.0
+api_token: secret-token
+from: "2024-01-01T00:00:00Z"
+org_id: my-org
+log_to_file: true
+log_file: /var/log/exporter.log
+debug: true
+query: "action = login"
+sleep: 500
+source: bitbucket
+workspace: my-workspace
+bb_username: bbuser
+bb_app_password: bbpassword
+jira_url: https://jira.example.com
+confluence_url: https://confluence.example.com
+atlassian_email: user@example.com
+atlassian_token: atlassian-secret
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadYAMLConfig(path)
+	if err != nil {
+		t.Fatalf("loadYAMLConfig: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"APIUserAgent", cfg.APIUserAgent, "myagent/1.0"},
+		{"APIToken", cfg.APIToken, "secret-token"},
+		{"From", cfg.From, "2024-01-01T00:00:00Z"},
+		{"OrgID", cfg.OrgID, "my-org"},
+		{"LogFilePath", cfg.LogFilePath, "/var/log/exporter.log"},
+		{"Query", cfg.Query, "action = login"},
+		{"Source", cfg.Source, "bitbucket"},
+		{"BBWorkspace", cfg.BBWorkspace, "my-workspace"},
+		{"BBUsername", cfg.BBUsername, "bbuser"},
+		{"BBAppPassword", cfg.BBAppPassword, "bbpassword"},
+		{"JiraURL", cfg.JiraURL, "https://jira.example.com"},
+		{"ConfluenceURL", cfg.ConfluenceURL, "https://confluence.example.com"},
+		{"AtlassianEmail", cfg.AtlassianEmail, "user@example.com"},
+		{"AtlassianToken", cfg.AtlassianToken, "atlassian-secret"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	if !cfg.LogToFile {
+		t.Error("LogToFile: got false, want true")
+	}
+	if !cfg.Debug {
+		t.Error("Debug: got false, want true")
+	}
+	if cfg.Sleep != 500 {
+		t.Errorf("Sleep: got %d, want 500", cfg.Sleep)
+	}
+}
+
+func TestLoadYAMLConfig_FileNotFound(t *testing.T) {
+	_, err := loadYAMLConfig(filepath.Join(t.TempDir(), "nonexistent.yaml"))
+	if err == nil {
+		t.Error("expected an error for missing file, got nil")
+	}
+}
+
+func TestLoadYAMLConfig_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte(":\tinvalid: yaml: content\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadYAMLConfig(path)
+	if err == nil {
+		t.Error("expected an error for invalid YAML, got nil")
+	}
+}
+
+func TestLoadYAMLConfig_PartialFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "partial.yaml")
+	content := "source: jira\natlassian_email: user@example.com\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadYAMLConfig(path)
+	if err != nil {
+		t.Fatalf("loadYAMLConfig: %v", err)
+	}
+
+	if cfg.Source != "jira" {
+		t.Errorf("Source: got %q, want %q", cfg.Source, "jira")
+	}
+	if cfg.AtlassianEmail != "user@example.com" {
+		t.Errorf("AtlassianEmail: got %q, want %q", cfg.AtlassianEmail, "user@example.com")
+	}
+	// Unset fields should be zero values.
+	if cfg.APIToken != "" {
+		t.Errorf("APIToken: got %q, want empty", cfg.APIToken)
+	}
+}
+
+func TestLoadYAMLConfig_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.yaml")
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadYAMLConfig(path)
+	if err != nil {
+		t.Fatalf("loadYAMLConfig: %v", err)
+	}
+
+	if cfg.Source != "" || cfg.APIToken != "" {
+		t.Error("empty YAML file should produce zero-value YAMLConfig")
+	}
+}
+
