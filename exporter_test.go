@@ -475,11 +475,11 @@ atlassian_token: atlassian-secret
 			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
 		}
 	}
-	if !cfg.LogToFile {
-		t.Error("LogToFile: got false, want true")
+	if cfg.LogToFile == nil || !*cfg.LogToFile {
+		t.Error("LogToFile: got nil or false, want true")
 	}
-	if !cfg.Debug {
-		t.Error("Debug: got false, want true")
+	if cfg.Debug == nil || !*cfg.Debug {
+		t.Error("Debug: got nil or false, want true")
 	}
 	if cfg.Sleep != 500 {
 		t.Errorf("Sleep: got %d, want 500", cfg.Sleep)
@@ -544,6 +544,37 @@ func TestLoadYAMLConfig_EmptyFile(t *testing.T) {
 
 	if cfg.Source != "" || cfg.APIToken != "" {
 		t.Error("empty YAML file should produce zero-value YAMLConfig")
+	}
+	if cfg.LogToFile != nil || cfg.Debug != nil {
+		t.Error("empty YAML file should leave boolean pointer fields as nil")
+	}
+}
+
+func TestMergeYAMLConfig_BooleanFalseOverride(t *testing.T) {
+	f := false
+	tr := true
+	// base has LogToFile=true, override sets it to false explicitly.
+	base := YAMLConfig{LogToFile: &tr, Debug: &tr}
+	override := YAMLConfig{LogToFile: &f}
+	merged := mergeYAMLConfig(base, override)
+
+	if merged.LogToFile == nil || *merged.LogToFile != false {
+		t.Error("mergeYAMLConfig: explicit false in override should set LogToFile=false")
+	}
+	// Debug not present in override — base value should be preserved.
+	if merged.Debug == nil || !*merged.Debug {
+		t.Error("mergeYAMLConfig: Debug not in override, should retain base true")
+	}
+}
+
+func TestMergeYAMLConfig_NilBoolNotOverridingBase(t *testing.T) {
+	tr := true
+	base := YAMLConfig{Debug: &tr}
+	override := YAMLConfig{} // Debug is nil — should not override.
+	merged := mergeYAMLConfig(base, override)
+
+	if merged.Debug == nil || !*merged.Debug {
+		t.Error("mergeYAMLConfig: nil bool in override should leave base value intact")
 	}
 }
 

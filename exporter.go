@@ -48,14 +48,16 @@ type Config struct {
 }
 
 // YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
+// Pointer types are used for booleans so that an explicit "false" in the YAML
+// file can be distinguished from a field that was simply omitted.
 type YAMLConfig struct {
 	APIUserAgent   string `yaml:"api_user_agent"`
 	APIToken       string `yaml:"api_token"`
 	From           string `yaml:"from"`
 	OrgID          string `yaml:"org_id"`
-	LogToFile      bool   `yaml:"log_to_file"`
+	LogToFile      *bool  `yaml:"log_to_file"`
 	LogFilePath    string `yaml:"log_file"`
-	Debug          bool   `yaml:"debug"`
+	Debug          *bool  `yaml:"debug"`
 	Query          string `yaml:"query"`
 	Sleep          int    `yaml:"sleep"`
 	Source         string `yaml:"source"`
@@ -76,6 +78,72 @@ func loadYAMLConfig(path string) (YAMLConfig, error) {
 		return cfg, err
 	}
 	return cfg, yaml.Unmarshal(data, &cfg)
+}
+
+// mergeYAMLConfig overlays non-zero fields from override onto base and returns
+// the merged result.  String fields are merged when non-empty; int fields when
+// non-zero; bool pointer fields when non-nil.
+func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
+	if override.APIUserAgent != "" {
+		base.APIUserAgent = override.APIUserAgent
+	}
+	if override.APIToken != "" {
+		base.APIToken = override.APIToken
+	}
+	if override.From != "" {
+		base.From = override.From
+	}
+	if override.OrgID != "" {
+		base.OrgID = override.OrgID
+	}
+	if override.LogToFile != nil {
+		base.LogToFile = override.LogToFile
+	}
+	if override.LogFilePath != "" {
+		base.LogFilePath = override.LogFilePath
+	}
+	if override.Debug != nil {
+		base.Debug = override.Debug
+	}
+	if override.Query != "" {
+		base.Query = override.Query
+	}
+	if override.Sleep != 0 {
+		base.Sleep = override.Sleep
+	}
+	if override.Source != "" {
+		base.Source = override.Source
+	}
+	if override.BBWorkspace != "" {
+		base.BBWorkspace = override.BBWorkspace
+	}
+	if override.BBUsername != "" {
+		base.BBUsername = override.BBUsername
+	}
+	if override.BBAppPassword != "" {
+		base.BBAppPassword = override.BBAppPassword
+	}
+	if override.JiraURL != "" {
+		base.JiraURL = override.JiraURL
+	}
+	if override.ConfluenceURL != "" {
+		base.ConfluenceURL = override.ConfluenceURL
+	}
+	if override.AtlassianEmail != "" {
+		base.AtlassianEmail = override.AtlassianEmail
+	}
+	if override.AtlassianToken != "" {
+		base.AtlassianToken = override.AtlassianToken
+	}
+	return base
+}
+
+// boolVal safely dereferences a *bool, returning false for nil.
+func boolVal(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
 }
 
 // BitbucketAuditEvent represents a single Bitbucket workspace audit log event.
@@ -247,57 +315,7 @@ func parseFlags() Config {
 			os.Exit(1)
 		}
 		// Overlay non-zero file values on top of env-var defaults.
-		if fileCfg.APIUserAgent != "" {
-			base.APIUserAgent = fileCfg.APIUserAgent
-		}
-		if fileCfg.APIToken != "" {
-			base.APIToken = fileCfg.APIToken
-		}
-		if fileCfg.From != "" {
-			base.From = fileCfg.From
-		}
-		if fileCfg.OrgID != "" {
-			base.OrgID = fileCfg.OrgID
-		}
-		if fileCfg.LogToFile {
-			base.LogToFile = fileCfg.LogToFile
-		}
-		if fileCfg.LogFilePath != "" {
-			base.LogFilePath = fileCfg.LogFilePath
-		}
-		if fileCfg.Debug {
-			base.Debug = fileCfg.Debug
-		}
-		if fileCfg.Query != "" {
-			base.Query = fileCfg.Query
-		}
-		if fileCfg.Sleep != 0 {
-			base.Sleep = fileCfg.Sleep
-		}
-		if fileCfg.Source != "" {
-			base.Source = fileCfg.Source
-		}
-		if fileCfg.BBWorkspace != "" {
-			base.BBWorkspace = fileCfg.BBWorkspace
-		}
-		if fileCfg.BBUsername != "" {
-			base.BBUsername = fileCfg.BBUsername
-		}
-		if fileCfg.BBAppPassword != "" {
-			base.BBAppPassword = fileCfg.BBAppPassword
-		}
-		if fileCfg.JiraURL != "" {
-			base.JiraURL = fileCfg.JiraURL
-		}
-		if fileCfg.ConfluenceURL != "" {
-			base.ConfluenceURL = fileCfg.ConfluenceURL
-		}
-		if fileCfg.AtlassianEmail != "" {
-			base.AtlassianEmail = fileCfg.AtlassianEmail
-		}
-		if fileCfg.AtlassianToken != "" {
-			base.AtlassianToken = fileCfg.AtlassianToken
-		}
+		base = mergeYAMLConfig(base, fileCfg)
 	}
 
 	config := Config{}
@@ -305,9 +323,9 @@ func parseFlags() Config {
 	flag.StringVar(&config.APIToken, "api_token", base.APIToken, "Atlassian Admin API Token (admin source)")
 	flag.StringVar(&config.From, "from", base.From, "(Optional) From date (RFC3339)")
 	flag.StringVar(&config.OrgID, "org_id", base.OrgID, "Organization ID (admin source)")
-	flag.BoolVar(&config.LogToFile, "log-to-file", base.LogToFile, "(Optional) Enable logging to file")
+	flag.BoolVar(&config.LogToFile, "log-to-file", boolVal(base.LogToFile), "(Optional) Enable logging to file")
 	flag.StringVar(&config.LogFilePath, "log-file", base.LogFilePath, "(Optional) Path to log file [default: log.txt]")
-	flag.BoolVar(&config.Debug, "debug", base.Debug, "Enable debug mode")
+	flag.BoolVar(&config.Debug, "debug", boolVal(base.Debug), "Enable debug mode")
 	flag.StringVar(&config.Query, "query", base.Query, "Query to filter the events")
 	flag.IntVar(&config.Sleep, "sleep", base.Sleep, "Sleep time milliseconds between requests")
 	flag.StringVar(&config.Source, "source", base.Source, "Log source: admin, bitbucket, jira, or confluence")
