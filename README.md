@@ -6,6 +6,8 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 
 - Fetches events from the Atlassian Admin API (organisation-level audit log)
 - Fetches events from the Bitbucket Cloud workspace audit log
+- Fetches audit records from Jira Cloud
+- Fetches audit records from Confluence Cloud
 - Supports custom date ranges for event retrieval
 - Handles API rate limiting
 - Logs events to console and optionally to a file
@@ -17,6 +19,8 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 - Go 1.x or higher
 - **Admin source**: Atlassian Admin API Token and Organisation ID
 - **Bitbucket source**: Bitbucket username, app password, and workspace slug
+- **Jira source**: Jira site URL, Atlassian account email, and personal API token
+- **Confluence source**: Confluence site URL, Atlassian account email, and personal API token
 
 ## Installation
 
@@ -56,7 +60,7 @@ Run the application with the following command:
 
 #### Common flags
 
-- `-source`: Log source — `admin` (default) or `bitbucket`
+- `-source`: Log source — `admin` (default), `bitbucket`, `jira`, or `confluence`
 - `-api_user_agent`: API User Agent (default `"curl/7.54.0"`)
 - `-from`: (Optional) From date in RFC3339 format; overrides saved state
 - `-log-to-file`: (Optional) Enable logging to file
@@ -76,6 +80,18 @@ Run the application with the following command:
 - `-bb-username`: Bitbucket username for basic auth (env: `BITBUCKET_USERNAME`)
 - `-bb-app-password`: Bitbucket app password for basic auth (env: `BITBUCKET_APP_PASSWORD`)
 
+#### Jira source flags
+
+- `-jira-url`: Jira site URL, e.g. `https://your-org.atlassian.net` (env: `JIRA_URL`)
+- `-atlassian-email`: Atlassian account email for basic auth (env: `ATLASSIAN_EMAIL`)
+- `-atlassian-token`: Atlassian personal API token for basic auth (env: `ATLASSIAN_TOKEN`)
+
+#### Confluence source flags
+
+- `-confluence-url`: Confluence site URL, e.g. `https://your-org.atlassian.net/wiki` (env: `CONFLUENCE_URL`)
+- `-atlassian-email`: Atlassian account email for basic auth (env: `ATLASSIAN_EMAIL`)
+- `-atlassian-token`: Atlassian personal API token for basic auth (env: `ATLASSIAN_TOKEN`)
+
 ### Environment Variables
 
 | Variable                    | Description                              |
@@ -85,6 +101,10 @@ Run the application with the following command:
 | `BITBUCKET_WORKSPACE`       | Bitbucket workspace slug                 |
 | `BITBUCKET_USERNAME`        | Bitbucket username                       |
 | `BITBUCKET_APP_PASSWORD`    | Bitbucket app password                   |
+| `JIRA_URL`                  | Jira site URL (jira source)              |
+| `CONFLUENCE_URL`            | Confluence site URL (confluence source)  |
+| `ATLASSIAN_EMAIL`           | Atlassian account email (jira/confluence)|
+| `ATLASSIAN_TOKEN`           | Atlassian personal API token (jira/confluence)|
 
 ## Examples
 
@@ -121,12 +141,56 @@ BITBUCKET_APP_PASSWORD=my-app-password \
 ./atlassian_log_exporter -source=bitbucket
 ```
 
+### Jira Cloud audit records
+
+```sh
+./atlassian_log_exporter \
+  -source=jira \
+  -jira-url=https://your-org.atlassian.net \
+  -atlassian-email=user@example.com \
+  -atlassian-token=your-api-token \
+  -from=2023-09-01T00:00:00Z \
+  -debug
+```
+
+or using environment variables:
+
+```sh
+JIRA_URL=https://your-org.atlassian.net \
+ATLASSIAN_EMAIL=user@example.com \
+ATLASSIAN_TOKEN=your-api-token \
+./atlassian_log_exporter -source=jira
+```
+
+### Confluence Cloud audit records
+
+```sh
+./atlassian_log_exporter \
+  -source=confluence \
+  -confluence-url=https://your-org.atlassian.net/wiki \
+  -atlassian-email=user@example.com \
+  -atlassian-token=your-api-token \
+  -from=2023-09-01T00:00:00Z \
+  -debug
+```
+
+or using environment variables:
+
+```sh
+CONFLUENCE_URL=https://your-org.atlassian.net/wiki \
+ATLASSIAN_EMAIL=user@example.com \
+ATLASSIAN_TOKEN=your-api-token \
+./atlassian_log_exporter -source=confluence
+```
+
 ## State Persistence
 
 The application saves the timestamp of the last processed event so it can resume from where it left off in subsequent runs:
 
 - **Admin source**: `atlassian_state.json`
 - **Bitbucket source**: `bitbucket_state.json`
+- **Jira source**: `jira_state.json`
+- **Confluence source**: `confluence_state.json`
 
 ## Error Handling
 
