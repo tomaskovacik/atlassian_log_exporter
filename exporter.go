@@ -838,6 +838,9 @@ func fetchBitbucketEvents(ctx context.Context, bbClient *bitbucket.Client, confi
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
+			if response != nil && response.Code == 404 {
+				return nil, fmt.Errorf("Bitbucket workspace audit log API returned 404 for workspace %q: this endpoint requires an Atlassian Guard (formerly Atlassian Access) license. Original error: %w", config.BBWorkspace, err)
+			}
 			return nil, err
 		}
 

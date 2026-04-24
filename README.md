@@ -17,11 +17,15 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 
 ## Prerequisites
 
-- Go 1.x or higher
+- Go 1.25 or higher
 - **Admin source**: Atlassian Admin API Token and Organisation ID
 - **Bitbucket source**: Bitbucket username, app password, and workspace slug
 - **Jira source**: Jira site URL, Atlassian account email, and personal API token
 - **Confluence source**: Confluence site URL, Atlassian account email, and personal API token
+
+> **ℹ️ Forked dependency**
+>
+> This project uses a [custom fork of go-atlassian](https://github.com/tomaskovacik/go-atlassian) (`github.com/tomaskovacik/go-atlassian/v2 v2.11.1-kovo`) that adds `AuthorAccountID` to `AuditRecordScheme`. The `replace` directive in `go.mod` handles this automatically — no manual steps are required beyond the standard `go mod tidy`.
 
 ## Installation
 
