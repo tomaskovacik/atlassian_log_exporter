@@ -255,13 +255,13 @@ func TestProcessBitbucketEvents_NoPanic(t *testing.T) {
 			},
 		},
 	}
-	processBitbucketEvents(pages, nopLogger())
+	processBitbucketEvents(pages, nopLogger(), nil, "")
 }
 
 func TestProcessBitbucketEvents_EmptyPages(t *testing.T) {
-	processBitbucketEvents(nil, nopLogger())
-	processBitbucketEvents([]BitbucketAuditPage{}, nopLogger())
-	processBitbucketEvents([]BitbucketAuditPage{{Values: nil}}, nopLogger())
+	processBitbucketEvents(nil, nopLogger(), nil, "")
+	processBitbucketEvents([]BitbucketAuditPage{}, nopLogger(), nil, "")
+	processBitbucketEvents([]BitbucketAuditPage{{Values: nil}}, nopLogger(), nil, "")
 }
 
 // ---------- processEvents (admin) ----------
@@ -286,7 +286,7 @@ func TestProcessEvents_NilLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger())
+	processEvents(chunks, nopLogger(), nil, "")
 }
 
 func TestProcessEvents_WithLocation(t *testing.T) {
@@ -311,12 +311,12 @@ func TestProcessEvents_WithLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger())
+	processEvents(chunks, nopLogger(), nil, "")
 }
 
 func TestProcessEvents_Empty(t *testing.T) {
-	processEvents(nil, nopLogger())
-	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger())
+	processEvents(nil, nopLogger(), nil, "")
+	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "")
 }
 
 // ---------- processJiraAuditRecords ----------
@@ -337,7 +337,7 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger())
+	processJiraAuditRecords(pages, nopLogger(), nil, "")
 }
 
 func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
@@ -358,12 +358,12 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger())
+	processJiraAuditRecords(pages, nopLogger(), nil, "")
 }
 
 func TestProcessJiraAuditRecords_Empty(t *testing.T) {
-	processJiraAuditRecords(nil, nopLogger())
-	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger())
+	processJiraAuditRecords(nil, nopLogger(), nil, "")
+	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "")
 }
 
 // ---------- processConfluenceAuditRecords ----------
@@ -389,13 +389,13 @@ func TestProcessConfluenceAuditRecords_NoPanic(t *testing.T) {
 			},
 		},
 	}
-	processConfluenceAuditRecords(pages, nopLogger())
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "")
 }
 
 func TestProcessConfluenceAuditRecords_Empty(t *testing.T) {
-	processConfluenceAuditRecords(nil, nopLogger())
-	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger())
-	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger())
+	processConfluenceAuditRecords(nil, nopLogger(), nil, "")
+	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger(), nil, "")
+	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger(), nil, "")
 }
 
 // ---------- fetchBitbucketEvents query building ----------
@@ -440,6 +440,10 @@ jira_url: https://jira.example.com
 confluence_url: https://confluence.example.com
 atlassian_email: user@example.com
 atlassian_token: atlassian-secret
+gelf_enabled: true
+gelf_host: graylog.example.com
+gelf_port: 12201
+gelf_protocol: tcp
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -469,6 +473,8 @@ atlassian_token: atlassian-secret
 		{"ConfluenceURL", cfg.ConfluenceURL, "https://confluence.example.com"},
 		{"AtlassianEmail", cfg.AtlassianEmail, "user@example.com"},
 		{"AtlassianToken", cfg.AtlassianToken, "atlassian-secret"},
+		{"GELFHost", cfg.GELFHost, "graylog.example.com"},
+		{"GELFProtocol", cfg.GELFProtocol, "tcp"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -483,6 +489,12 @@ atlassian_token: atlassian-secret
 	}
 	if cfg.Sleep != 500 {
 		t.Errorf("Sleep: got %d, want 500", cfg.Sleep)
+	}
+	if cfg.GELFEnabled == nil || !*cfg.GELFEnabled {
+		t.Error("GELFEnabled: got nil or false, want true")
+	}
+	if cfg.GELFPort != 12201 {
+		t.Errorf("GELFPort: got %d, want 12201", cfg.GELFPort)
 	}
 }
 
