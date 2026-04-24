@@ -11,13 +11,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/ctreminiom/go-atlassian/admin"
-	"github.com/ctreminiom/go-atlassian/bitbucket"
-	"github.com/ctreminiom/go-atlassian/confluence"
-	jirav2 "github.com/ctreminiom/go-atlassian/jira/v2"
-	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
+	"github.com/ctreminiom/go-atlassian/v2/admin"
+	"github.com/ctreminiom/go-atlassian/v2/bitbucket"
+	"github.com/ctreminiom/go-atlassian/v2/confluence"
+	jirav2 "github.com/ctreminiom/go-atlassian/v2/jira/v2"
+	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/Graylog2/go-gelf.v2/gelf"
@@ -468,6 +469,140 @@ func parseFlags() Config {
 	return config
 }
 
+// UserResolver resolves Atlassian account IDs to human-readable display names.
+// Resolved names are cached in-memory to avoid redundant requests within a
+// single run.  The resolver is generic: the API endpoint and authentication
+// strategy are supplied at construction time via buildRequest/extractName so
+// that both the Atlassian Admin API and the Jira REST API are supported without
+// code duplication.
+type UserResolver struct {
+	httpClient   *http.Client
+	mu           sync.RWMutex
+	cache        map[string]string
+	log          *zap.SugaredLogger
+	buildRequest func(id string) (*http.Request, error)
+	extractName  func(data []byte) (string, error)
+}
+
+// newUserResolver creates a UserResolver that resolves account IDs via the
+// Atlassian Admin User Management API
+// (GET https://api.atlassian.com/users/{id}/manage/profile) using Bearer auth.
+// Requires an Atlassian Guard subscription.
+func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			req, err := http.NewRequest(http.MethodGet,
+				fmt.Sprintf("https://api.atlassian.com/users/%s/manage/profile", id), nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+apiToken)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var profile struct {
+				Account struct {
+					Name string `json:"name"`
+				} `json:"account"`
+			}
+			if err := json.Unmarshal(data, &profile); err != nil {
+				return "", err
+			}
+			return profile.Account.Name, nil
+		},
+	}
+}
+
+// newJiraUserResolver creates a UserResolver that resolves account IDs via the
+// Jira Cloud REST API (GET {jiraURL}/rest/api/2/user?accountId=...) using Basic
+// Auth.  This does not require an Atlassian Guard subscription — the same
+// credentials used to fetch Jira audit records are sufficient.
+func newJiraUserResolver(jiraURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			u := jiraURL + "/rest/api/2/user?accountId=" + url.QueryEscape(id)
+			req, err := http.NewRequest(http.MethodGet, u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(email, token)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var user struct {
+				DisplayName string `json:"displayName"`
+			}
+			if err := json.Unmarshal(data, &user); err != nil {
+				return "", err
+			}
+			return user.DisplayName, nil
+		},
+	}
+}
+
+// resolve looks up the display name for an Atlassian account ID.  It strips the
+// "ug:" prefix that appears in audit log actor IDs before querying the API.
+// Returns an empty string when the name cannot be determined.
+func (r *UserResolver) resolve(accountID string) string {
+	id := strings.TrimPrefix(accountID, "ug:")
+	if id == "" {
+		return ""
+	}
+
+	r.mu.RLock()
+	name, ok := r.cache[id]
+	r.mu.RUnlock()
+	if ok {
+		return name
+	}
+
+	req, err := r.buildRequest(id)
+	if err != nil {
+		r.log.Warnf("UserResolver: failed to create request for %s: %v", id, err)
+		return ""
+	}
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		r.log.Warnf("UserResolver: request failed for %s: %v", id, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		r.log.Debugf("UserResolver: unexpected status %d for account %s", resp.StatusCode, id)
+		// Cache the empty result so we don't re-fetch an unresolvable account
+		// on every audit record that references it (e.g. deleted/service accounts).
+		r.mu.Lock()
+		r.cache[id] = ""
+		r.mu.Unlock()
+		return ""
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		r.log.Warnf("UserResolver: read failed for %s: %v", id, err)
+		return ""
+	}
+
+	name, err = r.extractName(data)
+	if err != nil {
+		r.log.Warnf("UserResolver: decode failed for %s: %v", id, err)
+		return ""
+	}
+
+	r.mu.Lock()
+	r.cache[id] = name
+	r.mu.Unlock()
+	return name
+}
+
 func initCloudAdmin(config Config, log *zap.SugaredLogger) (*admin.Client, error) {
 	// Create a custom HTTP client with a transport that can capture response bodies
 	httpClient := &http.Client{
@@ -590,7 +725,7 @@ func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLo
 	return retryAfter
 }
 
-func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
 	for _, chunk := range eventChunks {
 		for _, event := range chunk.Data {
 			var locationIP string
@@ -608,12 +743,18 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				eventLink = event.Links.Self
 			}
 
+			var actorDisplayName string
+			if resolver != nil {
+				actorDisplayName = resolver.resolve(event.Attributes.Actor.ID)
+			}
+
 			log.Debugf("Event: %v", event.Attributes.Container)
 			log.Info(
 				"Event ID:", event.ID,
 				", Event Time:", event.Attributes.Time,
 				", Event Actor ID:", event.Attributes.Actor.ID,
 				", Event Actor Name:", event.Attributes.Actor.Name,
+				", Event Actor Display Name:", actorDisplayName,
 				", Event Actor Link:", actorLink,
 				", Event Action:", event.Attributes.Action,
 				", Event Target:", locationIP,
@@ -628,15 +769,16 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
 				ts,
 				map[string]interface{}{
-					"_event_id":    event.ID,
-					"_event_time":  event.Attributes.Time,
-					"_actor_id":    event.Attributes.Actor.ID,
-					"_actor_name":  event.Attributes.Actor.Name,
-					"_actor_link":  actorLink,
-					"_action":      event.Attributes.Action,
-					"_location_ip": locationIP,
-					"_event_link":  eventLink,
-					"_source":      "admin",
+					"_event_id":            event.ID,
+					"_event_time":          event.Attributes.Time,
+					"_actor_id":            event.Attributes.Actor.ID,
+					"_actor_name":          event.Attributes.Actor.Name,
+					"_actor_display_name":  actorDisplayName,
+					"_actor_link":          actorLink,
+					"_action":              event.Attributes.Action,
+					"_location_ip":         locationIP,
+					"_event_link":          eventLink,
+					"_source":              "admin",
 				},
 				log,
 			)
@@ -807,7 +949,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, 
 		log.Errorf("Error getting last event time: %v", err)
 	}
 
-	processEvents(eventChunks, log, gelfWriter, config.GELFHost)
+	processEvents(eventChunks, log, gelfWriter, config.GELFHost, newUserResolver(config.APIToken, &http.Client{}, log))
 
 	log.Debugf("Last event time: %v, eventChunks[0].Data[0].Attributes.Time: %s", state.LastEventDate, eventChunks[0].Data[0].Attributes.Time)
 	if err = saveState(state, stateFilename); err != nil {
@@ -921,7 +1063,7 @@ func fetchJiraAuditRecords(ctx context.Context, jiraClient *jirav2.Client, confi
 	return pages, nil
 }
 
-func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
@@ -930,10 +1072,17 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				objectName = record.ObjectItem.Name
 				objectType = record.ObjectItem.TypeName
 			}
+
+			var authorDisplayName string
+			if resolver != nil && record.AuthorAccountID != "" {
+				authorDisplayName = resolver.resolve(record.AuthorAccountID)
+			}
+
 			log.Info(
 				"Record ID:", record.ID,
 				", Created:", record.Created,
-				", Author:", record.AuthorKey,
+				", Author:", record.AuthorAccountID,
+				", Author Display Name:", authorDisplayName,
 				", Summary:", record.Summary,
 				", Category:", record.Category,
 				", Remote Address:", record.RemoteAddress,
@@ -949,15 +1098,16 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				fmt.Sprintf("jira audit: %s", record.Summary),
 				ts,
 				map[string]interface{}{
-					"_record_id":      record.ID,
-					"_created":        record.Created,
-					"_author":         record.AuthorKey,
-					"_summary":        record.Summary,
-					"_category":       record.Category,
-					"_remote_address": record.RemoteAddress,
-					"_object":         objectName,
-					"_object_type":    objectType,
-					"_source":         "jira",
+					"_record_id":           record.ID,
+					"_created":             record.Created,
+					"_author":              record.AuthorAccountID,
+					"_author_display_name": authorDisplayName,
+					"_summary":             record.Summary,
+					"_category":            record.Category,
+					"_remote_address":      record.RemoteAddress,
+					"_object":              objectName,
+					"_object_type":         objectType,
+					"_source":              "jira",
 				},
 				log,
 			)
@@ -1008,7 +1158,8 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		log.Errorf("Error parsing last record date %q: %v", lastRecord.Created, err)
 	}
 
-	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost)
+	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {

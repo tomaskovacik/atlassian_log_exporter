@@ -137,6 +137,16 @@ The Bitbucket [App Password](https://bitbucket.org/account/settings/app-password
 
 Jira uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Jira Administrator** global permission (`Administer Jira`) on the target site, as the audit log API is restricted to site administrators.
 
+#### Author display name resolution for `ug:`-prefixed author keys
+
+Jira Cloud audit records sometimes carry an `AuthorKey` in `ug:UUID` format (a raw Atlassian account ID). The exporter automatically resolves these IDs to display names using the Jira REST API (`GET {jiraURL}/rest/api/2/user?accountId=...`) with the same Basic Auth credentials already required for audit log access. The resolved name is emitted as `_author_display_name` in log output and GELF fields.
+
+> **ℹ️ No Atlassian Guard subscription required**
+>
+> Unlike the **admin source** (organisation-level audit log), the Jira source uses only the standard Jira REST API for both audit record retrieval and author name resolution. A regular Jira Administrator personal API token is sufficient — no [Atlassian Guard](https://www.atlassian.com/software/access) (formerly Atlassian Access) subscription is needed.
+>
+> The admin source *does* require Guard: it authenticates with an organisation-level API key from [admin.atlassian.com](https://admin.atlassian.com), which can only be created when Guard is active on your Atlassian organisation.
+
 ### Confluence source — Personal API Token
 
 Confluence uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Confluence Administrator** (or **System Administrator**) global permission on the target site, as the audit log API is restricted to site administrators.
@@ -224,6 +234,8 @@ BITBUCKET_APP_PASSWORD=my-app-password \
 ```
 
 ### Jira Cloud audit records
+
+`ug:`-prefixed author keys are resolved to display names automatically using the Jira REST API — no extra flags or Atlassian Guard subscription required.
 
 ```sh
 ./atlassian_log_exporter \

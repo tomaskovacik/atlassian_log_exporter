@@ -3,7 +3,7 @@ module atlassian_log_exporter
 go 1.25.0
 
 require (
-	github.com/ctreminiom/go-atlassian v1.6.1
+	github.com/ctreminiom/go-atlassian/v2 v2.0.0-00010101000000-000000000000
 	go.uber.org/zap v1.27.0
 	gopkg.in/Graylog2/go-gelf.v2 v2.0.0-20191017102106-1550ee647df0
 	gopkg.in/yaml.v3 v3.0.1
@@ -11,9 +11,12 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 )
+
+replace github.com/ctreminiom/go-atlassian/v2 => github.com/tomaskovacik/go-atlassian/v2 v2.11.1-kovo

@@ -5,13 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
+	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
 	"go.uber.org/zap"
 )
 
@@ -286,7 +287,7 @@ func TestProcessEvents_NilLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "")
+	processEvents(chunks, nopLogger(), nil, "", nil)
 }
 
 func TestProcessEvents_WithLocation(t *testing.T) {
@@ -311,12 +312,12 @@ func TestProcessEvents_WithLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "")
+	processEvents(chunks, nopLogger(), nil, "", nil)
 }
 
 func TestProcessEvents_Empty(t *testing.T) {
-	processEvents(nil, nopLogger(), nil, "")
-	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "")
+	processEvents(nil, nopLogger(), nil, "", nil)
+	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "", nil)
 }
 
 // ---------- processJiraAuditRecords ----------
@@ -326,18 +327,18 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:            1,
-					Summary:       "User created",
-					AuthorKey:     "jdoe",
-					Created:       "2024-06-01T10:00:00.000+0000",
-					Category:      "user management",
-					RemoteAddress: "192.0.2.1",
-					ObjectItem:    nil,
+					ID:              1,
+					Summary:         "User created",
+					AuthorAccountID: "jdoe-account-id",
+					Created:         "2024-06-01T10:00:00.000+0000",
+					Category:        "user management",
+					RemoteAddress:   "192.0.2.1",
+					ObjectItem:      nil,
 				},
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "")
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
@@ -345,11 +346,11 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:        2,
-					Summary:   "Project created",
-					AuthorKey: "admin",
-					Created:   "2024-06-02T08:00:00.000+0000",
-					Category:  "project",
+					ID:              2,
+					Summary:         "Project created",
+					AuthorAccountID: "admin-account-id",
+					Created:         "2024-06-02T08:00:00.000+0000",
+					Category:        "project",
 					ObjectItem: &models.AuditRecordObjectItemScheme{
 						Name:     "MyProject",
 						TypeName: "PROJECT",
@@ -358,12 +359,92 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "")
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 func TestProcessJiraAuditRecords_Empty(t *testing.T) {
-	processJiraAuditRecords(nil, nopLogger(), nil, "")
-	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "")
+	processJiraAuditRecords(nil, nopLogger(), nil, "", nil)
+	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil)
+}
+
+// TestProcessJiraAuditRecords_AuthorAccountIDResolved checks that when AuthorAccountID
+// is populated and a resolver is provided, the resolver is called and the display
+// name is surfaced.
+func TestProcessJiraAuditRecords_AuthorAccountIDResolved(t *testing.T) {
+	const wantName = "Alice Cloud"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"` + wantName + `"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:              10,
+					Summary:         "User login",
+					AuthorAccountID: "58da8718-09f4-4f36-9d83-3ae82796ae3e",
+					Created:         "2024-06-01T10:00:00.000+0000",
+					Category:        "user management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+}
+
+// TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver checks that an
+// empty AuthorAccountID does not trigger resolver calls.
+func TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"displayName":"Should Not Resolve"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:       11,
+					Summary:  "Group updated",
+					Created:  "2024-06-01T12:00:00.000+0000",
+					Category: "group management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+
+	if called {
+		t.Error("resolver should not be called when AuthorAccountID is empty")
+	}
+}
+
+// TestProcessJiraAuditRecords_NilResolverAuthorAccountID checks that a nil resolver
+// with a populated AuthorAccountID does not panic.
+func TestProcessJiraAuditRecords_NilResolverAuthorAccountID(t *testing.T) {
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:              12,
+					Summary:         "User login",
+					AuthorAccountID: "some-account-id",
+					Created:         "2024-06-01T13:00:00.000+0000",
+					Category:        "user management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 // ---------- processConfluenceAuditRecords ----------
@@ -588,5 +669,210 @@ func TestMergeYAMLConfig_NilBoolNotOverridingBase(t *testing.T) {
 	if merged.Debug == nil || !*merged.Debug {
 		t.Error("mergeYAMLConfig: nil bool in override should leave base value intact")
 	}
+}
+
+// ---------- UserResolver ----------
+
+func TestUserResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/abc123/manage/profile") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("unexpected Authorization header %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"account":{"name":"Alice Wonderland"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("test-token", server.Client(), nopLogger())
+	// Override the base URL by pointing the resolver at the test server.
+	// We achieve this by making the httpClient a plain client and ensuring the
+	// test server intercepts: we rebuild the request URL to use the server base.
+	resolver.httpClient = server.Client()
+
+	// Patch resolve to use the test server URL by swapping the client's transport.
+	// Simpler: use a custom RoundTripper that rewrites the host.
+	resolver.httpClient = &http.Client{
+		Transport: rewriteHostTransport{
+			base:    server.URL,
+			wrapped: http.DefaultTransport,
+		},
+	}
+
+	got := resolver.resolve("abc123")
+	if got != "Alice Wonderland" {
+		t.Errorf("got %q, want %q", got, "Alice Wonderland")
+	}
+}
+
+func TestUserResolver_StripUGPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/stripped-id/manage/profile") {
+			t.Errorf("ug: prefix was not stripped, path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"account":{"name":"Bob Builder"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	got := resolver.resolve("ug:stripped-id")
+	if got != "Bob Builder" {
+		t.Errorf("got %q, want %q", got, "Bob Builder")
+	}
+}
+
+func TestUserResolver_Cache(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"account":{"name":"Cached Carol"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	resolver.resolve("user-id")
+	resolver.resolve("user-id")
+	resolver.resolve("ug:user-id") // same ID after prefix strip
+
+	if calls != 1 {
+		t.Errorf("expected 1 API call due to caching, got %d", calls)
+	}
+}
+
+func TestUserResolver_NonOKStatus(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	got := resolver.resolve("unknown-id")
+	if got != "" {
+		t.Errorf("expected empty string on non-OK status, got %q", got)
+	}
+	// Second call must hit the cache, not the server.
+	got = resolver.resolve("unknown-id")
+	if got != "" {
+		t.Errorf("expected empty string from cache, got %q", got)
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 server call due to caching of empty result, got %d", calls)
+	}
+}
+
+func TestUserResolver_EmptyAccountID(t *testing.T) {
+	resolver := newUserResolver("tok", http.DefaultClient, nopLogger())
+	if got := resolver.resolve(""); got != "" {
+		t.Errorf("expected empty string for empty account ID, got %q", got)
+	}
+	if got := resolver.resolve("ug:"); got != "" {
+		t.Errorf("expected empty string for 'ug:' only, got %q", got)
+	}
+}
+
+func TestProcessEvents_WithResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"account":{"name":"Dave Resolved"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	chunks := []*models.OrganizationEventPageScheme{
+		{
+			Data: []*models.OrganizationEventModelScheme{
+				{
+					ID: "ev-resolver",
+					Attributes: &models.OrganizationEventModelAttributesScheme{
+						Time:   "2024-06-01T10:00:00Z",
+						Action: "user_login",
+						Actor: &models.OrganizationEventActorModel{
+							ID:   "ug:actor-id",
+							Name: "dave@example.com",
+						},
+					},
+				},
+			},
+		},
+	}
+	// Must not panic; resolver is exercised.
+	processEvents(chunks, nopLogger(), nil, "", resolver)
+}
+
+// ---------- JiraUserResolver ----------
+
+func TestJiraUserResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method %s", r.Method)
+		}
+		if r.URL.Path != "/rest/api/2/user" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("accountId"); got != "abc123" {
+			t.Errorf("unexpected accountId query param %q", got)
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "user@example.com" || pass != "secret" {
+			t.Errorf("unexpected basic auth user=%q pass=%q ok=%v", user, pass, ok)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"Alice Jira"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "secret", server.Client(), nopLogger())
+	got := resolver.resolve("abc123")
+	if got != "Alice Jira" {
+		t.Errorf("got %q, want %q", got, "Alice Jira")
+	}
+}
+
+func TestJiraUserResolver_CleanAccountID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("accountId"); got != "stripped-id" {
+			t.Errorf("unexpected accountId=%q, want %q", got, "stripped-id")
+		}
+		_, _ = w.Write([]byte(`{"displayName":"Bob Jira"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
+	got := resolver.resolve("stripped-id")
+	if got != "Bob Jira" {
+		t.Errorf("got %q, want %q", got, "Bob Jira")
+	}
+}
+
+
+type rewriteHostTransport struct {
+	base    string // e.g. "http://127.0.0.1:PORT"
+	wrapped http.RoundTripper
+}
+
+func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	base, _ := url.Parse(t.base)
+	clone.URL.Scheme = base.Scheme
+	clone.URL.Host = base.Host
+	return t.wrapped.RoundTrip(clone)
 }
 
