@@ -219,14 +219,14 @@ type ConfluenceAuditObject struct {
 
 // ConfluenceAuditRecord represents a single Confluence audit record.
 type ConfluenceAuditRecord struct {
-	Author          ConfluenceAuditAuthor `json:"author"`
-	RemoteAddress   string                `json:"remoteAddress"`
-	CreationDate    int64                 `json:"creationDate"`
-	Summary         string                `json:"summary"`
-	Description     string                `json:"description"`
-	Category        string                `json:"category"`
-	SysAdmin        bool                  `json:"sysAdmin"`
-	AffectedObject  ConfluenceAuditObject `json:"affectedObject"`
+	Author         ConfluenceAuditAuthor `json:"author"`
+	RemoteAddress  string                `json:"remoteAddress"`
+	CreationDate   int64                 `json:"creationDate"`
+	Summary        string                `json:"summary"`
+	Description    string                `json:"description"`
+	Category       string                `json:"category"`
+	SysAdmin       bool                  `json:"sysAdmin"`
+	AffectedObject ConfluenceAuditObject `json:"affectedObject"`
 }
 
 // ConfluenceAuditLinks represents the pagination links in a Confluence audit response.
@@ -423,12 +423,9 @@ func parseFlags() Config {
 
 	flag.Parse()
 
-	// Apply GELF defaults that cannot be set via flag defaults (zero-value int).
+	// Apply GELF port default that cannot be set via a flag default (zero-value int).
 	if config.GELFPort == 0 {
 		config.GELFPort = 12201
-	}
-	if config.GELFProtocol == "" {
-		config.GELFProtocol = "udp"
 	}
 
 	if config.GELFEnabled && config.GELFHost == "" {
