@@ -1308,10 +1308,8 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 		return
 	}
 
-	// Records are returned oldest-first; pick the last record of the last page as checkpoint.
-	lastPage := pages[len(pages)-1]
-	lastRecord := lastPage.Results[len(lastPage.Results)-1]
-	state.LastEventDate = time.UnixMilli(lastRecord.CreationDate).UTC()
+	// Records are returned newest-first; pick the first record of the first page as checkpoint.
+	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
 
 	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost)
 
