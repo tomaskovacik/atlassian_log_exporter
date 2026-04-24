@@ -69,3 +69,19 @@ log_file: log.txt
 # confluence_url: ""     # CONFLUENCE_URL env var  (e.g. https://your-org.atlassian.net/wiki)
 # atlassian_email: ""    # ATLASSIAN_EMAIL env var
 # atlassian_token: ""    # ATLASSIAN_TOKEN env var
+
+# ---------------------------------------------------------------------------
+# Graylog GELF output (optional)
+# ---------------------------------------------------------------------------
+
+# Enable sending events to a Graylog server via GELF.
+# gelf_enabled: false
+
+# Hostname or IP address of the Graylog server.
+# gelf_host: "graylog.example.com"    # GELF_HOST env var
+
+# UDP or TCP port on which Graylog listens for GELF input (default: 12201).
+# gelf_port: 12201
+
+# Transport protocol: udp (default) or tcp.
+# gelf_protocol: udp

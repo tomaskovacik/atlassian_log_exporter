@@ -20,6 +20,7 @@ import (
 	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/Graylog2/go-gelf.v2/gelf"
 	"gopkg.in/yaml.v3"
 )
 
@@ -45,6 +46,10 @@ type Config struct {
 	ConfluenceURL  string
 	AtlassianEmail string
 	AtlassianToken string
+	GELFEnabled    bool
+	GELFHost       string
+	GELFPort       int
+	GELFProtocol   string
 }
 
 // YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
@@ -68,6 +73,10 @@ type YAMLConfig struct {
 	ConfluenceURL  string `yaml:"confluence_url"`
 	AtlassianEmail string `yaml:"atlassian_email"`
 	AtlassianToken string `yaml:"atlassian_token"`
+	GELFEnabled    *bool  `yaml:"gelf_enabled"`
+	GELFHost       string `yaml:"gelf_host"`
+	GELFPort       int    `yaml:"gelf_port"`
+	GELFProtocol   string `yaml:"gelf_protocol"`
 }
 
 // loadYAMLConfig reads a YAML configuration file and returns a YAMLConfig.
@@ -135,6 +144,18 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.AtlassianToken != "" {
 		base.AtlassianToken = override.AtlassianToken
 	}
+	if override.GELFEnabled != nil {
+		base.GELFEnabled = override.GELFEnabled
+	}
+	if override.GELFHost != "" {
+		base.GELFHost = override.GELFHost
+	}
+	if override.GELFPort != 0 {
+		base.GELFPort = override.GELFPort
+	}
+	if override.GELFProtocol != "" {
+		base.GELFProtocol = override.GELFProtocol
+	}
 	return base
 }
 
@@ -198,14 +219,14 @@ type ConfluenceAuditObject struct {
 
 // ConfluenceAuditRecord represents a single Confluence audit record.
 type ConfluenceAuditRecord struct {
-	Author          ConfluenceAuditAuthor `json:"author"`
-	RemoteAddress   string                `json:"remoteAddress"`
-	CreationDate    int64                 `json:"creationDate"`
-	Summary         string                `json:"summary"`
-	Description     string                `json:"description"`
-	Category        string                `json:"category"`
-	SysAdmin        bool                  `json:"sysAdmin"`
-	AffectedObject  ConfluenceAuditObject `json:"affectedObject"`
+	Author         ConfluenceAuditAuthor `json:"author"`
+	RemoteAddress  string                `json:"remoteAddress"`
+	CreationDate   int64                 `json:"creationDate"`
+	Summary        string                `json:"summary"`
+	Description    string                `json:"description"`
+	Category       string                `json:"category"`
+	SysAdmin       bool                  `json:"sysAdmin"`
+	AffectedObject ConfluenceAuditObject `json:"affectedObject"`
 }
 
 // ConfluenceAuditLinks represents the pagination links in a Confluence audit response.
@@ -274,6 +295,62 @@ func initLogger(debug bool, logToFile bool, logFilePath string) *zap.SugaredLogg
 	return logger.Sugar()
 }
 
+// GELFWriter is the interface satisfied by both gelf.UDPWriter and gelf.TCPWriter.
+type GELFWriter interface {
+	WriteMessage(m *gelf.Message) error
+	Close() error
+}
+
+// initGELF creates a GELF writer connecting to the configured Graylog host and
+// port using the specified protocol (udp or tcp).  Returns nil when GELF is
+// disabled.
+func initGELF(config Config, log *zap.SugaredLogger) GELFWriter {
+	if !config.GELFEnabled {
+		return nil
+	}
+
+	addr := fmt.Sprintf("%s:%d", config.GELFHost, config.GELFPort)
+
+	switch strings.ToLower(config.GELFProtocol) {
+	case "tcp":
+		w, err := gelf.NewTCPWriter(addr)
+		if err != nil {
+			log.Fatalf("Failed to create GELF TCP writer for %s: %v", addr, err)
+		}
+		log.Infof("GELF TCP output enabled, sending to %s", addr)
+		return w
+	default:
+		w, err := gelf.NewUDPWriter(addr)
+		if err != nil {
+			log.Fatalf("Failed to create GELF UDP writer for %s: %v", addr, err)
+		}
+		log.Infof("GELF UDP output enabled, sending to %s", addr)
+		return w
+	}
+}
+
+// sendGELF builds a GELF 1.1 message from the supplied short description,
+// timestamp, and extra fields, then writes it to the writer.  A nil writer is
+// a no-op so callers do not need to guard against it.
+func sendGELF(w GELFWriter, host, short string, ts time.Time, extra map[string]interface{}, log *zap.SugaredLogger) {
+	if w == nil {
+		return
+	}
+
+	m := &gelf.Message{
+		Version:  "1.1",
+		Host:     host,
+		Short:    short,
+		TimeUnix: float64(ts.Unix()),
+		Level:    6, // informational
+		Extra:    extra,
+	}
+
+	if err := w.WriteMessage(m); err != nil {
+		log.Warnf("Failed to send GELF message: %v", err)
+	}
+}
+
 func parseFlags() Config {
 	// Pre-scan os.Args for -config / --config so we can load the YAML file
 	// before registering flag defaults. We do not call flag.Parse() yet.
@@ -306,6 +383,8 @@ func parseFlags() Config {
 		ConfluenceURL:  os.Getenv("CONFLUENCE_URL"),
 		AtlassianEmail: os.Getenv("ATLASSIAN_EMAIL"),
 		AtlassianToken: os.Getenv("ATLASSIAN_TOKEN"),
+		GELFHost:       os.Getenv("GELF_HOST"),
+		GELFProtocol:   "udp",
 	}
 
 	if configFile != "" {
@@ -336,9 +415,24 @@ func parseFlags() Config {
 	flag.StringVar(&config.ConfluenceURL, "confluence-url", base.ConfluenceURL, "Confluence site URL, e.g. https://your-org.atlassian.net/wiki (confluence source)")
 	flag.StringVar(&config.AtlassianEmail, "atlassian-email", base.AtlassianEmail, "Atlassian account email for basic auth (jira/confluence source)")
 	flag.StringVar(&config.AtlassianToken, "atlassian-token", base.AtlassianToken, "Atlassian personal API token for basic auth (jira/confluence source)")
+	flag.BoolVar(&config.GELFEnabled, "gelf-enabled", boolVal(base.GELFEnabled), "Enable GELF output to Graylog")
+	flag.StringVar(&config.GELFHost, "gelf-host", base.GELFHost, "Graylog GELF host (env: GELF_HOST)")
+	flag.IntVar(&config.GELFPort, "gelf-port", base.GELFPort, "Graylog GELF port (default 12201)")
+	flag.StringVar(&config.GELFProtocol, "gelf-protocol", base.GELFProtocol, "Graylog GELF protocol: udp or tcp (default: udp)")
 	flag.String("config", "", "(Optional) Path to YAML configuration file")
 
 	flag.Parse()
+
+	// Apply GELF port default that cannot be set via a flag default (zero-value int).
+	if config.GELFPort == 0 {
+		config.GELFPort = 12201
+	}
+
+	if config.GELFEnabled && config.GELFHost == "" {
+		fmt.Fprintln(os.Stderr, "gelf-enabled requires -gelf-host")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
 
 	switch config.Source {
 	case "admin":
@@ -496,7 +590,7 @@ func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLo
 	return retryAfter
 }
 
-func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger) {
+func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
 	for _, chunk := range eventChunks {
 		for _, event := range chunk.Data {
 			var locationIP string
@@ -524,6 +618,27 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				", Event Action:", event.Attributes.Action,
 				", Event Target:", locationIP,
 				", Event Link:", eventLink,
+			)
+
+			ts, err := time.Parse(time.RFC3339, event.Attributes.Time)
+			if err != nil {
+				ts = time.Now().UTC()
+			}
+			sendGELF(gelfWriter, gelfHost,
+				fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
+				ts,
+				map[string]interface{}{
+					"_event_id":    event.ID,
+					"_event_time":  event.Attributes.Time,
+					"_actor_id":    event.Attributes.Actor.ID,
+					"_actor_name":  event.Attributes.Actor.Name,
+					"_actor_link":  actorLink,
+					"_action":      event.Attributes.Action,
+					"_location_ip": locationIP,
+					"_event_link":  eventLink,
+					"_source":      "admin",
+				},
+				log,
 			)
 		}
 	}
@@ -614,7 +729,7 @@ func handleBitbucketRateLimit(response *models.ResponseScheme, log *zap.SugaredL
 	return retryAfter
 }
 
-func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger) {
+func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
 	for _, page := range pages {
 		for _, event := range page.Values {
 			log.Info(
@@ -627,11 +742,32 @@ func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger) 
 				", Subject Type:", event.Subject.Type,
 				", Subject Name:", event.Subject.DisplayName,
 			)
+
+			ts, err := time.Parse(time.RFC3339, event.Date)
+			if err != nil {
+				ts = time.Now().UTC()
+			}
+			sendGELF(gelfWriter, gelfHost,
+				fmt.Sprintf("bitbucket audit: %s", event.Action),
+				ts,
+				map[string]interface{}{
+					"_event_id":      event.ID,
+					"_event_date":    event.Date,
+					"_actor_uuid":    event.Actor.UUID,
+					"_actor_name":    event.Actor.DisplayName,
+					"_actor_account": event.Actor.AccountID,
+					"_action":        event.Action,
+					"_subject_type":  event.Subject.Type,
+					"_subject_name":  event.Subject.DisplayName,
+					"_source":        "bitbucket",
+				},
+				log,
+			)
 		}
 	}
 }
 
-func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger) {
+func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
 	stateFilename := "atlassian_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -671,7 +807,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger) 
 		log.Errorf("Error getting last event time: %v", err)
 	}
 
-	processEvents(eventChunks, log)
+	processEvents(eventChunks, log, gelfWriter, config.GELFHost)
 
 	log.Debugf("Last event time: %v, eventChunks[0].Data[0].Attributes.Time: %s", state.LastEventDate, eventChunks[0].Data[0].Attributes.Time)
 	if err = saveState(state, stateFilename); err != nil {
@@ -679,7 +815,8 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger) 
 	}
 }
 
-func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogger) {	stateFilename := "bitbucket_state.json"
+func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
+	stateFilename := "bitbucket_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
 		log.Errorf("Error loading state: %v. Starting from beginning.", err)
@@ -720,7 +857,7 @@ func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogg
 		log.Errorf("Error parsing last event date %q: %v", pages[0].Values[0].Date, err)
 	}
 
-	processBitbucketEvents(pages, log)
+	processBitbucketEvents(pages, log, gelfWriter, config.GELFHost)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -784,7 +921,7 @@ func fetchJiraAuditRecords(ctx context.Context, jiraClient *jirav2.Client, confi
 	return pages, nil
 }
 
-func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger) {
+func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
@@ -803,11 +940,32 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				", Object:", objectName,
 				", Object Type:", objectType,
 			)
+
+			ts, err := time.Parse("2006-01-02T15:04:05.999-0700", record.Created)
+			if err != nil {
+				ts = time.Now().UTC()
+			}
+			sendGELF(gelfWriter, gelfHost,
+				fmt.Sprintf("jira audit: %s", record.Summary),
+				ts,
+				map[string]interface{}{
+					"_record_id":      record.ID,
+					"_created":        record.Created,
+					"_author":         record.AuthorKey,
+					"_summary":        record.Summary,
+					"_category":       record.Category,
+					"_remote_address": record.RemoteAddress,
+					"_object":         objectName,
+					"_object_type":    objectType,
+					"_source":         "jira",
+				},
+				log,
+			)
 		}
 	}
 }
 
-func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger) {
+func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
 	stateFilename := "jira_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -850,7 +1008,7 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger) {
 		log.Errorf("Error parsing last record date %q: %v", lastRecord.Created, err)
 	}
 
-	processJiraAuditRecords(pages, log)
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -926,7 +1084,7 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 	return pages, nil
 }
 
-func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger) {
+func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
 	for _, page := range pages {
 		for _, record := range page.Results {
 			createdMs := time.UnixMilli(record.CreationDate).UTC()
@@ -940,11 +1098,28 @@ func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.Sugared
 				", Object:", record.AffectedObject.Name,
 				", Object Type:", record.AffectedObject.ObjectType,
 			)
+
+			sendGELF(gelfWriter, gelfHost,
+				fmt.Sprintf("confluence audit: %s", record.Summary),
+				createdMs,
+				map[string]interface{}{
+					"_created":        createdMs.Format(time.RFC3339),
+					"_author":         record.Author.DisplayName,
+					"_author_account": record.Author.AccountID,
+					"_summary":        record.Summary,
+					"_category":       record.Category,
+					"_remote_address": record.RemoteAddress,
+					"_object":         record.AffectedObject.Name,
+					"_object_type":    record.AffectedObject.ObjectType,
+					"_source":         "confluence",
+				},
+				log,
+			)
 		}
 	}
 }
 
-func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLogger) {
+func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
 	stateFilename := "confluence_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -984,7 +1159,7 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	lastRecord := lastPage.Results[len(lastPage.Results)-1]
 	state.LastEventDate = time.UnixMilli(lastRecord.CreationDate).UTC()
 
-	processConfluenceAuditRecords(pages, log)
+	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -997,16 +1172,21 @@ func main() {
 	log := initLogger(config.Debug, config.LogToFile, config.LogFilePath)
 	defer log.Sync()
 
+	gelfWriter := initGELF(config, log)
+	if gelfWriter != nil {
+		defer gelfWriter.Close()
+	}
+
 	ctx := context.Background()
 
 	switch config.Source {
 	case "admin":
-		runAdminSource(ctx, config, log)
+		runAdminSource(ctx, config, log, gelfWriter)
 	case "bitbucket":
-		runBitbucketSource(ctx, config, log)
+		runBitbucketSource(ctx, config, log, gelfWriter)
 	case "jira":
-		runJiraSource(ctx, config, log)
+		runJiraSource(ctx, config, log, gelfWriter)
 	case "confluence":
-		runConfluenceSource(ctx, config, log)
+		runConfluenceSource(ctx, config, log, gelfWriter)
 	}
 }

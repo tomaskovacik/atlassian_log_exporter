@@ -11,6 +11,7 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 - Supports custom date ranges for event retrieval
 - Handles API rate limiting
 - Logs events to console and optionally to a file
+- Sends events to Graylog via GELF (UDP or TCP) for centralised log management
 - Persists the last processed event date to resume from where it left off
 - Configurable via command-line flags, environment variables, or a YAML configuration file
 
@@ -69,6 +70,10 @@ Run the application with the following command:
 - `-debug`: Enable debug mode
 - `-query`: Query string to filter events
 - `-sleep`: Sleep time in milliseconds between paginated requests (default `200`)
+- `-gelf-enabled`: Enable GELF output to Graylog
+- `-gelf-host`: Graylog server hostname or IP (env: `GELF_HOST`)
+- `-gelf-port`: Graylog GELF input port (default `12201`)
+- `-gelf-protocol`: Transport protocol `udp` (default) or `tcp`
 
 #### Admin source flags
 
@@ -106,6 +111,7 @@ Run the application with the following command:
 | `CONFLUENCE_URL`            | Confluence site URL (confluence source)  |
 | `ATLASSIAN_EMAIL`           | Atlassian account email (jira/confluence)|
 | `ATLASSIAN_TOKEN`           | Atlassian personal API token (jira/confluence)|
+| `GELF_HOST`                 | Graylog GELF server hostname or IP       |
 
 ## Required Token Scopes / Permissions
 
@@ -177,6 +183,10 @@ CLI flags override anything set in the file:
 | `confluence_url`  | `-confluence-url`    | `CONFLUENCE_URL`            | Confluence site URL |
 | `atlassian_email` | `-atlassian-email`   | `ATLASSIAN_EMAIL`           | Atlassian account email |
 | `atlassian_token` | `-atlassian-token`   | `ATLASSIAN_TOKEN`           | Atlassian personal API token |
+| `gelf_enabled`    | `-gelf-enabled`      | —                           | Enable GELF output to Graylog |
+| `gelf_host`       | `-gelf-host`         | `GELF_HOST`                 | Graylog GELF server hostname or IP |
+| `gelf_port`       | `-gelf-port`         | —                           | Graylog GELF port (default 12201) |
+| `gelf_protocol`   | `-gelf-protocol`     | —                           | GELF transport: `udp` (default) or `tcp` |
 
 ## Examples
 
@@ -271,6 +281,30 @@ The application handles various error scenarios, including API rate limiting. Wh
 ## Logging
 
 Logs are output to the console by default. If the `-log-to-file` flag is set, logs will also be written to the specified file (default: `log.txt`).
+
+## Graylog GELF output
+
+When `-gelf-enabled` is set, every audit event is forwarded to a Graylog server as a structured [GELF 1.1](https://go2docs.graylog.org/current/getting_in_log_data/gelf.html) message over UDP (default) or TCP. Each message carries the event fields as GELF additional fields (prefixed with `_`) so they appear as dedicated columns in Graylog.
+
+```sh
+./atlassian_log_exporter \
+  -source=admin \
+  -api_token=your_token \
+  -org_id=your_org \
+  -gelf-enabled \
+  -gelf-host=graylog.example.com \
+  -gelf-port=12201 \
+  -gelf-protocol=udp
+```
+
+Or via YAML:
+
+```yaml
+gelf_enabled: true
+gelf_host: graylog.example.com
+gelf_port: 12201
+gelf_protocol: udp
+```
 
 ## Contributing
 
