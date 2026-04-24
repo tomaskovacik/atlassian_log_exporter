@@ -91,6 +91,7 @@ Run the application with the following command:
 - `-jira-url`: Jira site URL, e.g. `https://your-org.atlassian.net` (env: `JIRA_URL`)
 - `-atlassian-email`: Atlassian account email for basic auth (env: `ATLASSIAN_EMAIL`)
 - `-atlassian-token`: Atlassian personal API token for basic auth (env: `ATLASSIAN_TOKEN`)
+- `-api_token`: (Optional) Atlassian Admin API token (env: `ATLASSIAN_ADMIN_API_TOKEN`) — when set, `ug:`-prefixed author keys are resolved to display names via the Admin User Management API (requires Atlassian Guard)
 
 #### Confluence source flags
 
@@ -136,6 +137,20 @@ The Bitbucket [App Password](https://bitbucket.org/account/settings/app-password
 ### Jira source — Personal API Token
 
 Jira uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Jira Administrator** global permission (`Administer Jira`) on the target site, as the audit log API is restricted to site administrators.
+
+#### Optional: author display name resolution for `ug:`-prefixed author keys
+
+Jira Cloud audit records sometimes carry an `AuthorKey` in `ug:UUID` format (a raw Atlassian account ID). When this happens, the log line would normally show only the opaque UUID with no human-readable name.
+
+To resolve these IDs to display names, supply the **Atlassian Admin API token** via `-api_token` (or `ATLASSIAN_ADMIN_API_TOKEN`). When set, the exporter calls the [Atlassian User Management REST API](https://developer.atlassian.com/cloud/admin/user-management/rest/) (`GET https://api.atlassian.com/users/{accountId}/manage/profile`) and emits the resolved display name as `_author_display_name`. If `-api_token` is not provided, a warning is logged and the field is left empty.
+
+> **⚠️ Atlassian Guard (formerly Atlassian Access) requirement**
+>
+> The Atlassian Admin API — including the User Management profile endpoint — is part of `api.atlassian.com` and is authenticated with an **organisation-level API key** generated in [admin.atlassian.com](https://admin.atlassian.com). Creating such a key requires an active **[Atlassian Guard](https://www.atlassian.com/software/access)** (formerly Atlassian Access) subscription on your Atlassian organisation.
+>
+> In other words, both the **admin source** (organisation audit log) and the **Jira `ug:` author resolver** rely on the same Guard-gated admin API token. If your organisation does not have Guard, the token cannot be created and author display name resolution will not be available for `ug:`-prefixed keys.
+>
+> Author keys that are **not** prefixed with `ug:` (e.g. a plain username) are logged as-is and do not require the admin token.
 
 ### Confluence source — Personal API Token
 
@@ -231,6 +246,19 @@ BITBUCKET_APP_PASSWORD=my-app-password \
   -jira-url=https://your-org.atlassian.net \
   -atlassian-email=user@example.com \
   -atlassian-token=your-api-token \
+  -from=2023-09-01T00:00:00Z \
+  -debug
+```
+
+With optional `ug:` author resolution (requires Atlassian Guard):
+
+```sh
+./atlassian_log_exporter \
+  -source=jira \
+  -jira-url=https://your-org.atlassian.net \
+  -atlassian-email=user@example.com \
+  -atlassian-token=your-api-token \
+  -api_token=your-admin-api-token \
   -from=2023-09-01T00:00:00Z \
   -debug
 ```
