@@ -245,6 +245,32 @@ type ConfluenceAuditPage struct {
 	Links   ConfluenceAuditLinks    `json:"_links"`
 }
 
+// jiraAuditRecord mirrors the library's AuditRecordScheme but additionally
+// captures the authorAccountId field, which is absent from the upstream model
+// but is required for correct user resolution via /rest/api/2/user?accountId=.
+type jiraAuditRecord struct {
+	ID              int                                       `json:"id,omitempty"`
+	Summary         string                                    `json:"summary,omitempty"`
+	RemoteAddress   string                                    `json:"remoteAddress,omitempty"`
+	AuthorKey       string                                    `json:"authorKey,omitempty"`
+	AuthorAccountID string                                    `json:"authorAccountId,omitempty"`
+	Created         string                                    `json:"created,omitempty"`
+	Category        string                                    `json:"category,omitempty"`
+	EventSource     string                                    `json:"eventSource,omitempty"`
+	Description     string                                    `json:"description,omitempty"`
+	ObjectItem      *models.AuditRecordObjectItemScheme       `json:"objectItem,omitempty"`
+	ChangedValues   []*models.AuditRecordChangedValueScheme   `json:"changedValues,omitempty"`
+	AssociatedItems []*models.AuditRecordAssociatedItemScheme `json:"associatedItems,omitempty"`
+}
+
+// jiraAuditPage represents one page of Jira audit records.
+type jiraAuditPage struct {
+	Offset  int                `json:"offset,omitempty"`
+	Limit   int                `json:"limit,omitempty"`
+	Total   int                `json:"total,omitempty"`
+	Records []*jiraAuditRecord `json:"records,omitempty"`
+}
+
 func saveState(state SavedState, filename string) error {
 	jsonData, err := json.Marshal(state)
 	if err != nil {
