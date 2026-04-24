@@ -576,7 +576,12 @@ func (r *UserResolver) resolve(accountID string) string {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		r.log.Warnf("UserResolver: unexpected status %d for account %s", resp.StatusCode, id)
+		r.log.Debugf("UserResolver: unexpected status %d for account %s", resp.StatusCode, id)
+		// Cache the empty result so we don't re-fetch an unresolvable account
+		// on every audit record that references it (e.g. deleted/service accounts).
+		r.mu.Lock()
+		r.cache[id] = ""
+		r.mu.Unlock()
 		return ""
 	}
 

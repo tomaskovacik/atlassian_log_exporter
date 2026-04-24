@@ -752,7 +752,9 @@ func TestUserResolver_Cache(t *testing.T) {
 }
 
 func TestUserResolver_NonOKStatus(t *testing.T) {
+	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -764,6 +766,14 @@ func TestUserResolver_NonOKStatus(t *testing.T) {
 	got := resolver.resolve("unknown-id")
 	if got != "" {
 		t.Errorf("expected empty string on non-OK status, got %q", got)
+	}
+	// Second call must hit the cache, not the server.
+	got = resolver.resolve("unknown-id")
+	if got != "" {
+		t.Errorf("expected empty string from cache, got %q", got)
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 server call due to caching of empty result, got %d", calls)
 	}
 }
 
