@@ -338,7 +338,7 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "")
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
@@ -359,12 +359,99 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "")
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 func TestProcessJiraAuditRecords_Empty(t *testing.T) {
-	processJiraAuditRecords(nil, nopLogger(), nil, "")
-	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "")
+	processJiraAuditRecords(nil, nopLogger(), nil, "", nil)
+	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil)
+}
+
+// TestProcessJiraAuditRecords_UGPrefixAuthorResolved checks that when AuthorKey
+// is in "ug:UUID" format and a resolver is provided, the resolver is called and
+// the display name is surfaced.
+func TestProcessJiraAuditRecords_UGPrefixAuthorResolved(t *testing.T) {
+	const wantName = "Alice Cloud"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"account":{"name":"` + wantName + `"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{}, nopLogger())
+	resolver.httpClient = &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}
+
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:        10,
+					Summary:   "User login",
+					AuthorKey: "ug:58da8718-09f4-4f36-9d83-3ae82796ae3e",
+					Created:   "2024-06-01T10:00:00.000+0000",
+					Category:  "user management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+}
+
+// TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver checks that a plain
+// username (no "ug:" prefix) does not trigger resolver calls.
+func TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"account":{"name":"Should Not Resolve"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{}, nopLogger())
+	resolver.httpClient = &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}
+
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:        11,
+					Summary:   "Group updated",
+					AuthorKey: "jdoe",
+					Created:   "2024-06-01T12:00:00.000+0000",
+					Category:  "group management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+
+	if called {
+		t.Error("resolver should not be called for non-ug: author keys")
+	}
+}
+
+// TestProcessJiraAuditRecords_NilResolverUGAuthor checks that a nil resolver
+// with a ug:-prefixed AuthorKey does not panic.
+func TestProcessJiraAuditRecords_NilResolverUGAuthor(t *testing.T) {
+	pages := []*models.AuditRecordPageScheme{
+		{
+			Records: []*models.AuditRecordScheme{
+				{
+					ID:        12,
+					Summary:   "User login",
+					AuthorKey: "ug:some-uuid",
+					Created:   "2024-06-01T13:00:00.000+0000",
+					Category:  "user management",
+				},
+			},
+		},
+	}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
 }
 
 // ---------- processConfluenceAuditRecords ----------

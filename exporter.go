@@ -1003,7 +1003,7 @@ func fetchJiraAuditRecords(ctx context.Context, jiraClient *jirav2.Client, confi
 	return pages, nil
 }
 
-func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
@@ -1012,10 +1012,17 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				objectName = record.ObjectItem.Name
 				objectType = record.ObjectItem.TypeName
 			}
+
+			var authorDisplayName string
+			if resolver != nil && strings.HasPrefix(record.AuthorKey, "ug:") {
+				authorDisplayName = resolver.resolve(record.AuthorKey)
+			}
+
 			log.Info(
 				"Record ID:", record.ID,
 				", Created:", record.Created,
 				", Author:", record.AuthorKey,
+				", Author Display Name:", authorDisplayName,
 				", Summary:", record.Summary,
 				", Category:", record.Category,
 				", Remote Address:", record.RemoteAddress,
@@ -1031,15 +1038,16 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				fmt.Sprintf("jira audit: %s", record.Summary),
 				ts,
 				map[string]interface{}{
-					"_record_id":      record.ID,
-					"_created":        record.Created,
-					"_author":         record.AuthorKey,
-					"_summary":        record.Summary,
-					"_category":       record.Category,
-					"_remote_address": record.RemoteAddress,
-					"_object":         objectName,
-					"_object_type":    objectType,
-					"_source":         "jira",
+					"_record_id":           record.ID,
+					"_created":             record.Created,
+					"_author":              record.AuthorKey,
+					"_author_display_name": authorDisplayName,
+					"_summary":             record.Summary,
+					"_category":            record.Category,
+					"_remote_address":      record.RemoteAddress,
+					"_object":              objectName,
+					"_object_type":         objectType,
+					"_source":              "jira",
 				},
 				log,
 			)
@@ -1090,7 +1098,13 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		log.Errorf("Error parsing last record date %q: %v", lastRecord.Created, err)
 	}
 
-	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost)
+	var jiraResolver *UserResolver
+	if config.APIToken != "" {
+		jiraResolver = newUserResolver(config.APIToken, &http.Client{}, log)
+	} else {
+		log.Warn("api_token not set: author display name resolution is disabled for ug:-prefixed author keys")
+	}
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
