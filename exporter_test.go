@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,7 +287,7 @@ func TestProcessEvents_NilLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "")
+	processEvents(chunks, nopLogger(), nil, "", nil)
 }
 
 func TestProcessEvents_WithLocation(t *testing.T) {
@@ -311,12 +312,12 @@ func TestProcessEvents_WithLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "")
+	processEvents(chunks, nopLogger(), nil, "", nil)
 }
 
 func TestProcessEvents_Empty(t *testing.T) {
-	processEvents(nil, nopLogger(), nil, "")
-	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "")
+	processEvents(nil, nopLogger(), nil, "", nil)
+	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "", nil)
 }
 
 // ---------- processJiraAuditRecords ----------
@@ -588,5 +589,156 @@ func TestMergeYAMLConfig_NilBoolNotOverridingBase(t *testing.T) {
 	if merged.Debug == nil || !*merged.Debug {
 		t.Error("mergeYAMLConfig: nil bool in override should leave base value intact")
 	}
+}
+
+// ---------- UserResolver ----------
+
+func TestUserResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/abc123/manage/profile") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("unexpected Authorization header %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"account":{"name":"Alice Wonderland"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("test-token", server.Client(), nopLogger())
+	// Override the base URL by pointing the resolver at the test server.
+	// We achieve this by making the httpClient a plain client and ensuring the
+	// test server intercepts: we rebuild the request URL to use the server base.
+	resolver.httpClient = server.Client()
+
+	// Patch resolve to use the test server URL by swapping the client's transport.
+	// Simpler: use a custom RoundTripper that rewrites the host.
+	resolver.httpClient = &http.Client{
+		Transport: rewriteHostTransport{
+			base:    server.URL,
+			wrapped: http.DefaultTransport,
+		},
+	}
+
+	got := resolver.resolve("abc123")
+	if got != "Alice Wonderland" {
+		t.Errorf("got %q, want %q", got, "Alice Wonderland")
+	}
+}
+
+func TestUserResolver_StripUGPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/stripped-id/manage/profile") {
+			t.Errorf("ug: prefix was not stripped, path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"account":{"name":"Bob Builder"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	got := resolver.resolve("ug:stripped-id")
+	if got != "Bob Builder" {
+		t.Errorf("got %q, want %q", got, "Bob Builder")
+	}
+}
+
+func TestUserResolver_Cache(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"account":{"name":"Cached Carol"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	resolver.resolve("user-id")
+	resolver.resolve("user-id")
+	resolver.resolve("ug:user-id") // same ID after prefix strip
+
+	if calls != 1 {
+		t.Errorf("expected 1 API call due to caching, got %d", calls)
+	}
+}
+
+func TestUserResolver_NonOKStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	got := resolver.resolve("unknown-id")
+	if got != "" {
+		t.Errorf("expected empty string on non-OK status, got %q", got)
+	}
+}
+
+func TestUserResolver_EmptyAccountID(t *testing.T) {
+	resolver := newUserResolver("tok", http.DefaultClient, nopLogger())
+	if got := resolver.resolve(""); got != "" {
+		t.Errorf("expected empty string for empty account ID, got %q", got)
+	}
+	if got := resolver.resolve("ug:"); got != "" {
+		t.Errorf("expected empty string for 'ug:' only, got %q", got)
+	}
+}
+
+func TestProcessEvents_WithResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"account":{"name":"Dave Resolved"}}`))
+	}))
+	defer server.Close()
+
+	resolver := newUserResolver("tok", &http.Client{
+		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
+	}, nopLogger())
+
+	chunks := []*models.OrganizationEventPageScheme{
+		{
+			Data: []*models.OrganizationEventModelScheme{
+				{
+					ID: "ev-resolver",
+					Attributes: &models.OrganizationEventModelAttributesScheme{
+						Time:   "2024-06-01T10:00:00Z",
+						Action: "user_login",
+						Actor: &models.OrganizationEventActorModel{
+							ID:   "ug:actor-id",
+							Name: "dave@example.com",
+						},
+					},
+				},
+			},
+		},
+	}
+	// Must not panic; resolver is exercised.
+	processEvents(chunks, nopLogger(), nil, "", resolver)
+}
+
+// rewriteHostTransport replaces the host in outgoing requests with the base URL
+// of a test server, allowing tests to intercept API calls without DNS changes.
+type rewriteHostTransport struct {
+	base    string // e.g. "http://127.0.0.1:PORT"
+	wrapped http.RoundTripper
+}
+
+func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	base, _ := url.Parse(t.base)
+	clone.URL.Scheme = base.Scheme
+	clone.URL.Host = base.Host
+	return t.wrapped.RoundTrip(clone)
 }
 

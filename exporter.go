@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ctreminiom/go-atlassian/admin"
@@ -468,6 +469,80 @@ func parseFlags() Config {
 	return config
 }
 
+// UserResolver resolves Atlassian account IDs to human-readable display names
+// by calling the Atlassian User Management API.  Resolved names are cached
+// in-memory to avoid redundant requests within a single run.
+type UserResolver struct {
+	apiToken   string
+	httpClient *http.Client
+	mu         sync.RWMutex
+	cache      map[string]string
+	log        *zap.SugaredLogger
+}
+
+// newUserResolver creates a UserResolver backed by the supplied HTTP client and
+// Atlassian API token (Bearer).
+func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		apiToken:   apiToken,
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+	}
+}
+
+// resolve looks up the display name for an Atlassian account ID.  It strips the
+// "ug:" prefix that appears in admin audit log actor IDs before querying the
+// API.  Returns an empty string when the name cannot be determined.
+func (r *UserResolver) resolve(accountID string) string {
+	id := strings.TrimPrefix(accountID, "ug:")
+	if id == "" {
+		return ""
+	}
+
+	r.mu.RLock()
+	name, ok := r.cache[id]
+	r.mu.RUnlock()
+	if ok {
+		return name
+	}
+
+	reqURL := fmt.Sprintf("https://api.atlassian.com/users/%s/manage/profile", id)
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		r.log.Warnf("UserResolver: failed to create request for %s: %v", id, err)
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+r.apiToken)
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		r.log.Warnf("UserResolver: request failed for %s: %v", id, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		r.log.Warnf("UserResolver: unexpected status %d for account %s", resp.StatusCode, id)
+		return ""
+	}
+
+	var profile struct {
+		Account struct {
+			Name string `json:"name"`
+		} `json:"account"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		r.log.Warnf("UserResolver: decode failed for %s: %v", id, err)
+		return ""
+	}
+
+	r.mu.Lock()
+	r.cache[id] = profile.Account.Name
+	r.mu.Unlock()
+	return profile.Account.Name
+}
+
 func initCloudAdmin(config Config, log *zap.SugaredLogger) (*admin.Client, error) {
 	// Create a custom HTTP client with a transport that can capture response bodies
 	httpClient := &http.Client{
@@ -590,7 +665,7 @@ func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLo
 	return retryAfter
 }
 
-func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
 	for _, chunk := range eventChunks {
 		for _, event := range chunk.Data {
 			var locationIP string
@@ -608,12 +683,18 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				eventLink = event.Links.Self
 			}
 
+			var actorDisplayName string
+			if resolver != nil {
+				actorDisplayName = resolver.resolve(event.Attributes.Actor.ID)
+			}
+
 			log.Debugf("Event: %v", event.Attributes.Container)
 			log.Info(
 				"Event ID:", event.ID,
 				", Event Time:", event.Attributes.Time,
 				", Event Actor ID:", event.Attributes.Actor.ID,
 				", Event Actor Name:", event.Attributes.Actor.Name,
+				", Event Actor Display Name:", actorDisplayName,
 				", Event Actor Link:", actorLink,
 				", Event Action:", event.Attributes.Action,
 				", Event Target:", locationIP,
@@ -628,15 +709,16 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 				fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
 				ts,
 				map[string]interface{}{
-					"_event_id":    event.ID,
-					"_event_time":  event.Attributes.Time,
-					"_actor_id":    event.Attributes.Actor.ID,
-					"_actor_name":  event.Attributes.Actor.Name,
-					"_actor_link":  actorLink,
-					"_action":      event.Attributes.Action,
-					"_location_ip": locationIP,
-					"_event_link":  eventLink,
-					"_source":      "admin",
+					"_event_id":            event.ID,
+					"_event_time":          event.Attributes.Time,
+					"_actor_id":            event.Attributes.Actor.ID,
+					"_actor_name":          event.Attributes.Actor.Name,
+					"_actor_display_name":  actorDisplayName,
+					"_actor_link":          actorLink,
+					"_action":              event.Attributes.Action,
+					"_location_ip":         locationIP,
+					"_event_link":          eventLink,
+					"_source":              "admin",
 				},
 				log,
 			)
@@ -807,7 +889,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, 
 		log.Errorf("Error getting last event time: %v", err)
 	}
 
-	processEvents(eventChunks, log, gelfWriter, config.GELFHost)
+	processEvents(eventChunks, log, gelfWriter, config.GELFHost, newUserResolver(config.APIToken, &http.Client{}, log))
 
 	log.Debugf("Last event time: %v, eventChunks[0].Data[0].Attributes.Time: %s", state.LastEventDate, eventChunks[0].Data[0].Attributes.Time)
 	if err = saveState(state, stateFilename); err != nil {
