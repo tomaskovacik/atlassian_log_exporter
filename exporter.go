@@ -1153,12 +1153,10 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		return
 	}
 
-	// Records are returned oldest-first; pick the last record of the last page as checkpoint.
-	lastPage := pages[len(pages)-1]
-	lastRecord := lastPage.Records[len(lastPage.Records)-1]
-	state.LastEventDate, err = time.Parse("2006-01-02T15:04:05.999-0700", lastRecord.Created)
+	// Records are returned newest-first; pick the first record of the first page as checkpoint.
+	state.LastEventDate, err = time.Parse("2006-01-02T15:04:05.999-0700", pages[0].Records[0].Created)
 	if err != nil {
-		log.Errorf("Error parsing last record date %q: %v", lastRecord.Created, err)
+		log.Errorf("Error parsing last record date %q: %v", pages[0].Records[0].Created, err)
 	}
 
 	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
