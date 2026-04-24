@@ -525,6 +525,7 @@ gelf_enabled: true
 gelf_host: graylog.example.com
 gelf_port: 12201
 gelf_protocol: tcp
+gelf_source_host: my-exporter-host
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -556,6 +557,7 @@ gelf_protocol: tcp
 		{"AtlassianToken", cfg.AtlassianToken, "atlassian-secret"},
 		{"GELFHost", cfg.GELFHost, "graylog.example.com"},
 		{"GELFProtocol", cfg.GELFProtocol, "tcp"},
+		{"GELFSourceHost", cfg.GELFSourceHost, "my-exporter-host"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

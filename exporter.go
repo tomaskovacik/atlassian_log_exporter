@@ -47,10 +47,11 @@ type Config struct {
 	ConfluenceURL  string
 	AtlassianEmail string
 	AtlassianToken string
-	GELFEnabled    bool
-	GELFHost       string
-	GELFPort       int
-	GELFProtocol   string
+	GELFEnabled      bool
+	GELFHost         string
+	GELFPort         int
+	GELFProtocol     string
+	GELFSourceHost   string
 }
 
 // YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
@@ -78,6 +79,7 @@ type YAMLConfig struct {
 	GELFHost       string `yaml:"gelf_host"`
 	GELFPort       int    `yaml:"gelf_port"`
 	GELFProtocol   string `yaml:"gelf_protocol"`
+	GELFSourceHost string `yaml:"gelf_source_host"`
 }
 
 // loadYAMLConfig reads a YAML configuration file and returns a YAMLConfig.
@@ -156,6 +158,9 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	}
 	if override.GELFProtocol != "" {
 		base.GELFProtocol = override.GELFProtocol
+	}
+	if override.GELFSourceHost != "" {
+		base.GELFSourceHost = override.GELFSourceHost
 	}
 	return base
 }
@@ -385,6 +390,7 @@ func parseFlags() Config {
 		AtlassianEmail: os.Getenv("ATLASSIAN_EMAIL"),
 		AtlassianToken: os.Getenv("ATLASSIAN_TOKEN"),
 		GELFHost:       os.Getenv("GELF_HOST"),
+		GELFSourceHost: os.Getenv("GELF_SOURCE_HOST"),
 		GELFProtocol:   "udp",
 	}
 
@@ -420,6 +426,7 @@ func parseFlags() Config {
 	flag.StringVar(&config.GELFHost, "gelf-host", base.GELFHost, "Graylog GELF host (env: GELF_HOST)")
 	flag.IntVar(&config.GELFPort, "gelf-port", base.GELFPort, "Graylog GELF port (default 12201)")
 	flag.StringVar(&config.GELFProtocol, "gelf-protocol", base.GELFProtocol, "Graylog GELF protocol: udp or tcp (default: udp)")
+	flag.StringVar(&config.GELFSourceHost, "gelf-source-host", base.GELFSourceHost, "Source host field in GELF messages (env: GELF_SOURCE_HOST); defaults to gelf-host when not set")
 	flag.String("config", "", "(Optional) Path to YAML configuration file")
 
 	flag.Parse()
@@ -427,6 +434,11 @@ func parseFlags() Config {
 	// Apply GELF port default that cannot be set via a flag default (zero-value int).
 	if config.GELFPort == 0 {
 		config.GELFPort = 12201
+	}
+
+	// Default source host to the Graylog destination host for backward compatibility.
+	if config.GELFSourceHost == "" {
+		config.GELFSourceHost = config.GELFHost
 	}
 
 	if config.GELFEnabled && config.GELFHost == "" {
@@ -952,7 +964,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, 
 		log.Errorf("Error getting last event time: %v", err)
 	}
 
-	processEvents(eventChunks, log, gelfWriter, config.GELFHost, newUserResolver(config.APIToken, &http.Client{}, log))
+	processEvents(eventChunks, log, gelfWriter, config.GELFSourceHost, newUserResolver(config.APIToken, &http.Client{}, log))
 
 	log.Debugf("Last event time: %v, eventChunks[0].Data[0].Attributes.Time: %s", state.LastEventDate, eventChunks[0].Data[0].Attributes.Time)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1002,7 +1014,7 @@ func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogg
 		log.Errorf("Error parsing last event date %q: %v", pages[0].Values[0].Date, err)
 	}
 
-	processBitbucketEvents(pages, log, gelfWriter, config.GELFHost)
+	processBitbucketEvents(pages, log, gelfWriter, config.GELFSourceHost)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1160,7 +1172,7 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 	}
 
 	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver)
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFSourceHost, jiraResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1309,7 +1321,7 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	// Records are returned newest-first; pick the first record of the first page as checkpoint.
 	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
 
-	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost)
+	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFSourceHost)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
