@@ -1,0 +1,71 @@
+# atlassian_log_exporter – example YAML configuration file
+#
+# Copy this file to config.yaml, fill in the required values for your chosen
+# source, and run:
+#
+#   ./atlassian_log_exporter -config config.yaml
+#
+# CLI flags always override values set here.
+# Environment variables are used as a fallback when a field is absent from
+# both the config file and the CLI flags.
+
+# ---------------------------------------------------------------------------
+# General settings
+# ---------------------------------------------------------------------------
+
+# Log source to export audit events from.
+# Allowed values: admin, bitbucket, jira, confluence
+source: admin
+
+# (Optional) Only fetch events that occurred after this date (RFC3339).
+# from: "2024-01-01T00:00:00Z"
+
+# Milliseconds to sleep between paginated API requests (default: 200).
+sleep: 200
+
+# Custom HTTP User-Agent header sent with every API request.
+api_user_agent: "curl/7.54.0"
+
+# Enable verbose debug logging.
+debug: false
+
+# (Optional) Filter expression passed to the upstream API.
+# query: ""
+
+# ---------------------------------------------------------------------------
+# Logging to file (optional)
+# ---------------------------------------------------------------------------
+
+log_to_file: false
+log_file: log.txt
+
+# ---------------------------------------------------------------------------
+# Source: admin  (Atlassian Access / Cloud Admin)
+# ---------------------------------------------------------------------------
+
+# api_token: ""          # ATLASSIAN_ADMIN_API_TOKEN env var
+# org_id: ""             # ATLASSIAN_ORGID env var
+
+# ---------------------------------------------------------------------------
+# Source: bitbucket
+# ---------------------------------------------------------------------------
+
+# workspace: ""          # BITBUCKET_WORKSPACE env var
+# bb_username: ""        # BITBUCKET_USERNAME env var
+# bb_app_password: ""    # BITBUCKET_APP_PASSWORD env var
+
+# ---------------------------------------------------------------------------
+# Source: jira
+# ---------------------------------------------------------------------------
+
+# jira_url: ""           # JIRA_URL env var  (e.g. https://your-org.atlassian.net)
+# atlassian_email: ""    # ATLASSIAN_EMAIL env var
+# atlassian_token: ""    # ATLASSIAN_TOKEN env var
+
+# ---------------------------------------------------------------------------
+# Source: confluence
+# ---------------------------------------------------------------------------
+
+# confluence_url: ""     # CONFLUENCE_URL env var  (e.g. https://your-org.atlassian.net/wiki)
+# atlassian_email: ""    # ATLASSIAN_EMAIL env var
+# atlassian_token: ""    # ATLASSIAN_TOKEN env var

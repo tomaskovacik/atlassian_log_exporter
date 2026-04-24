@@ -20,6 +20,7 @@ import (
 	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v3"
 )
 
 type SavedState struct {
@@ -27,23 +28,122 @@ type SavedState struct {
 }
 
 type Config struct {
-	APIUserAgent    string
-	APIToken        string
-	From            string
-	OrgID           string
-	LogToFile       bool
-	LogFilePath     string
-	Debug           bool
-	Query           string
-	Sleep           int
-	Source          string
-	BBWorkspace     string
-	BBUsername      string
-	BBAppPassword   string
-	JiraURL         string
-	ConfluenceURL   string
-	AtlassianEmail  string
-	AtlassianToken  string
+	APIUserAgent   string
+	APIToken       string
+	From           string
+	OrgID          string
+	LogToFile      bool
+	LogFilePath    string
+	Debug          bool
+	Query          string
+	Sleep          int
+	Source         string
+	BBWorkspace    string
+	BBUsername     string
+	BBAppPassword  string
+	JiraURL        string
+	ConfluenceURL  string
+	AtlassianEmail string
+	AtlassianToken string
+}
+
+// YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
+// Pointer types are used for booleans so that an explicit "false" in the YAML
+// file can be distinguished from a field that was simply omitted.
+type YAMLConfig struct {
+	APIUserAgent   string `yaml:"api_user_agent"`
+	APIToken       string `yaml:"api_token"`
+	From           string `yaml:"from"`
+	OrgID          string `yaml:"org_id"`
+	LogToFile      *bool  `yaml:"log_to_file"`
+	LogFilePath    string `yaml:"log_file"`
+	Debug          *bool  `yaml:"debug"`
+	Query          string `yaml:"query"`
+	Sleep          int    `yaml:"sleep"`
+	Source         string `yaml:"source"`
+	BBWorkspace    string `yaml:"workspace"`
+	BBUsername     string `yaml:"bb_username"`
+	BBAppPassword  string `yaml:"bb_app_password"`
+	JiraURL        string `yaml:"jira_url"`
+	ConfluenceURL  string `yaml:"confluence_url"`
+	AtlassianEmail string `yaml:"atlassian_email"`
+	AtlassianToken string `yaml:"atlassian_token"`
+}
+
+// loadYAMLConfig reads a YAML configuration file and returns a YAMLConfig.
+func loadYAMLConfig(path string) (YAMLConfig, error) {
+	var cfg YAMLConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	return cfg, yaml.Unmarshal(data, &cfg)
+}
+
+// mergeYAMLConfig overlays non-zero fields from override onto base and returns
+// the merged result.  String fields are merged when non-empty; int fields when
+// non-zero; bool pointer fields when non-nil.
+func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
+	if override.APIUserAgent != "" {
+		base.APIUserAgent = override.APIUserAgent
+	}
+	if override.APIToken != "" {
+		base.APIToken = override.APIToken
+	}
+	if override.From != "" {
+		base.From = override.From
+	}
+	if override.OrgID != "" {
+		base.OrgID = override.OrgID
+	}
+	if override.LogToFile != nil {
+		base.LogToFile = override.LogToFile
+	}
+	if override.LogFilePath != "" {
+		base.LogFilePath = override.LogFilePath
+	}
+	if override.Debug != nil {
+		base.Debug = override.Debug
+	}
+	if override.Query != "" {
+		base.Query = override.Query
+	}
+	if override.Sleep != 0 {
+		base.Sleep = override.Sleep
+	}
+	if override.Source != "" {
+		base.Source = override.Source
+	}
+	if override.BBWorkspace != "" {
+		base.BBWorkspace = override.BBWorkspace
+	}
+	if override.BBUsername != "" {
+		base.BBUsername = override.BBUsername
+	}
+	if override.BBAppPassword != "" {
+		base.BBAppPassword = override.BBAppPassword
+	}
+	if override.JiraURL != "" {
+		base.JiraURL = override.JiraURL
+	}
+	if override.ConfluenceURL != "" {
+		base.ConfluenceURL = override.ConfluenceURL
+	}
+	if override.AtlassianEmail != "" {
+		base.AtlassianEmail = override.AtlassianEmail
+	}
+	if override.AtlassianToken != "" {
+		base.AtlassianToken = override.AtlassianToken
+	}
+	return base
+}
+
+// boolVal safely dereferences a *bool, returning false for nil.
+func boolVal(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
 }
 
 // BitbucketAuditEvent represents a single Bitbucket workspace audit log event.
@@ -175,24 +275,68 @@ func initLogger(debug bool, logToFile bool, logFilePath string) *zap.SugaredLogg
 }
 
 func parseFlags() Config {
+	// Pre-scan os.Args for -config / --config so we can load the YAML file
+	// before registering flag defaults. We do not call flag.Parse() yet.
+	configFile := ""
+	for i, arg := range os.Args[1:] {
+		trimmed := strings.TrimLeft(arg, "-")
+		if trimmed == "config" && i+1 < len(os.Args)-1 {
+			configFile = os.Args[i+2]
+			break
+		}
+		if strings.HasPrefix(trimmed, "config=") {
+			configFile = strings.SplitN(trimmed, "=", 2)[1]
+			break
+		}
+	}
+
+	// Start with env-var defaults, then overlay values from the YAML config
+	// file so that explicit CLI flags can still override everything.
+	base := YAMLConfig{
+		APIUserAgent:   "curl/7.54.0",
+		APIToken:       os.Getenv("ATLASSIAN_ADMIN_API_TOKEN"),
+		OrgID:          os.Getenv("ATLASSIAN_ORGID"),
+		LogFilePath:    "log.txt",
+		Sleep:          200,
+		Source:         "admin",
+		BBWorkspace:    os.Getenv("BITBUCKET_WORKSPACE"),
+		BBUsername:     os.Getenv("BITBUCKET_USERNAME"),
+		BBAppPassword:  os.Getenv("BITBUCKET_APP_PASSWORD"),
+		JiraURL:        os.Getenv("JIRA_URL"),
+		ConfluenceURL:  os.Getenv("CONFLUENCE_URL"),
+		AtlassianEmail: os.Getenv("ATLASSIAN_EMAIL"),
+		AtlassianToken: os.Getenv("ATLASSIAN_TOKEN"),
+	}
+
+	if configFile != "" {
+		fileCfg, err := loadYAMLConfig(configFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config file %s: %v\n", configFile, err)
+			os.Exit(1)
+		}
+		// Overlay non-zero file values on top of env-var defaults.
+		base = mergeYAMLConfig(base, fileCfg)
+	}
+
 	config := Config{}
-	flag.StringVar(&config.APIUserAgent, "api_user_agent", "curl/7.54.0", "API User Agent")
-	flag.StringVar(&config.APIToken, "api_token", os.Getenv("ATLASSIAN_ADMIN_API_TOKEN"), "Atlassian Admin API Token (admin source)")
-	flag.StringVar(&config.From, "from", "", "(Optional) From date (RFC3339)")
-	flag.StringVar(&config.OrgID, "org_id", os.Getenv("ATLASSIAN_ORGID"), "Organization ID (admin source)")
-	flag.BoolVar(&config.LogToFile, "log-to-file", false, "(Optional) Enable logging to file")
-	flag.StringVar(&config.LogFilePath, "log-file", "log.txt", "(Optional) Path to log file [default: log.txt]")
-	flag.BoolVar(&config.Debug, "debug", false, "Enable debug mode")
-	flag.StringVar(&config.Query, "query", "", "Query to filter the events")
-	flag.IntVar(&config.Sleep, "sleep", 200, "Sleep time milliseconds between requests")
-	flag.StringVar(&config.Source, "source", "admin", "Log source: admin, bitbucket, jira, or confluence")
-	flag.StringVar(&config.BBWorkspace, "workspace", os.Getenv("BITBUCKET_WORKSPACE"), "Bitbucket workspace slug (bitbucket source)")
-	flag.StringVar(&config.BBUsername, "bb-username", os.Getenv("BITBUCKET_USERNAME"), "Bitbucket username for basic auth (bitbucket source)")
-	flag.StringVar(&config.BBAppPassword, "bb-app-password", os.Getenv("BITBUCKET_APP_PASSWORD"), "Bitbucket app password for basic auth (bitbucket source)")
-	flag.StringVar(&config.JiraURL, "jira-url", os.Getenv("JIRA_URL"), "Jira site URL, e.g. https://your-org.atlassian.net (jira source)")
-	flag.StringVar(&config.ConfluenceURL, "confluence-url", os.Getenv("CONFLUENCE_URL"), "Confluence site URL, e.g. https://your-org.atlassian.net/wiki (confluence source)")
-	flag.StringVar(&config.AtlassianEmail, "atlassian-email", os.Getenv("ATLASSIAN_EMAIL"), "Atlassian account email for basic auth (jira/confluence source)")
-	flag.StringVar(&config.AtlassianToken, "atlassian-token", os.Getenv("ATLASSIAN_TOKEN"), "Atlassian personal API token for basic auth (jira/confluence source)")
+	flag.StringVar(&config.APIUserAgent, "api_user_agent", base.APIUserAgent, "API User Agent")
+	flag.StringVar(&config.APIToken, "api_token", base.APIToken, "Atlassian Admin API Token (admin source)")
+	flag.StringVar(&config.From, "from", base.From, "(Optional) From date (RFC3339)")
+	flag.StringVar(&config.OrgID, "org_id", base.OrgID, "Organization ID (admin source)")
+	flag.BoolVar(&config.LogToFile, "log-to-file", boolVal(base.LogToFile), "(Optional) Enable logging to file")
+	flag.StringVar(&config.LogFilePath, "log-file", base.LogFilePath, "(Optional) Path to log file [default: log.txt]")
+	flag.BoolVar(&config.Debug, "debug", boolVal(base.Debug), "Enable debug mode")
+	flag.StringVar(&config.Query, "query", base.Query, "Query to filter the events")
+	flag.IntVar(&config.Sleep, "sleep", base.Sleep, "Sleep time milliseconds between requests")
+	flag.StringVar(&config.Source, "source", base.Source, "Log source: admin, bitbucket, jira, or confluence")
+	flag.StringVar(&config.BBWorkspace, "workspace", base.BBWorkspace, "Bitbucket workspace slug (bitbucket source)")
+	flag.StringVar(&config.BBUsername, "bb-username", base.BBUsername, "Bitbucket username for basic auth (bitbucket source)")
+	flag.StringVar(&config.BBAppPassword, "bb-app-password", base.BBAppPassword, "Bitbucket app password for basic auth (bitbucket source)")
+	flag.StringVar(&config.JiraURL, "jira-url", base.JiraURL, "Jira site URL, e.g. https://your-org.atlassian.net (jira source)")
+	flag.StringVar(&config.ConfluenceURL, "confluence-url", base.ConfluenceURL, "Confluence site URL, e.g. https://your-org.atlassian.net/wiki (confluence source)")
+	flag.StringVar(&config.AtlassianEmail, "atlassian-email", base.AtlassianEmail, "Atlassian account email for basic auth (jira/confluence source)")
+	flag.StringVar(&config.AtlassianToken, "atlassian-token", base.AtlassianToken, "Atlassian personal API token for basic auth (jira/confluence source)")
+	flag.String("config", "", "(Optional) Path to YAML configuration file")
 
 	flag.Parse()
 

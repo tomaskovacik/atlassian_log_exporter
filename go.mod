@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/ctreminiom/go-atlassian v1.6.1
 	go.uber.org/zap v1.27.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
