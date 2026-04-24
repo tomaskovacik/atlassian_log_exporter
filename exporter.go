@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ctreminiom/go-atlassian/admin"
-	"github.com/ctreminiom/go-atlassian/bitbucket"
-	"github.com/ctreminiom/go-atlassian/confluence"
-	jirav2 "github.com/ctreminiom/go-atlassian/jira/v2"
-	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
+	"github.com/ctreminiom/go-atlassian/v2/admin"
+	"github.com/ctreminiom/go-atlassian/v2/bitbucket"
+	"github.com/ctreminiom/go-atlassian/v2/confluence"
+	jirav2 "github.com/ctreminiom/go-atlassian/v2/jira/v2"
+	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/Graylog2/go-gelf.v2/gelf"
@@ -243,32 +243,6 @@ type ConfluenceAuditPage struct {
 	Limit   int                     `json:"limit"`
 	Size    int                     `json:"size"`
 	Links   ConfluenceAuditLinks    `json:"_links"`
-}
-
-// jiraAuditRecord mirrors the library's AuditRecordScheme but additionally
-// captures the authorAccountId field, which is absent from the upstream model
-// but is required for correct user resolution via /rest/api/2/user?accountId=.
-type jiraAuditRecord struct {
-	ID              int                                       `json:"id,omitempty"`
-	Summary         string                                    `json:"summary,omitempty"`
-	RemoteAddress   string                                    `json:"remoteAddress,omitempty"`
-	AuthorKey       string                                    `json:"authorKey,omitempty"`
-	AuthorAccountID string                                    `json:"authorAccountId,omitempty"`
-	Created         string                                    `json:"created,omitempty"`
-	Category        string                                    `json:"category,omitempty"`
-	EventSource     string                                    `json:"eventSource,omitempty"`
-	Description     string                                    `json:"description,omitempty"`
-	ObjectItem      *models.AuditRecordObjectItemScheme       `json:"objectItem,omitempty"`
-	ChangedValues   []*models.AuditRecordChangedValueScheme   `json:"changedValues,omitempty"`
-	AssociatedItems []*models.AuditRecordAssociatedItemScheme `json:"associatedItems,omitempty"`
-}
-
-// jiraAuditPage represents one page of Jira audit records.
-type jiraAuditPage struct {
-	Offset  int                `json:"offset,omitempty"`
-	Limit   int                `json:"limit,omitempty"`
-	Total   int                `json:"total,omitempty"`
-	Records []*jiraAuditRecord `json:"records,omitempty"`
 }
 
 func saveState(state SavedState, filename string) error {
@@ -1100,14 +1074,14 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 			}
 
 			var authorDisplayName string
-			if resolver != nil && strings.HasPrefix(record.AuthorKey, "ug:") {
-				authorDisplayName = resolver.resolve(record.AuthorKey)
+			if resolver != nil && record.AuthorAccountID != "" {
+				authorDisplayName = resolver.resolve(record.AuthorAccountID)
 			}
 
 			log.Info(
 				"Record ID:", record.ID,
 				", Created:", record.Created,
-				", Author:", record.AuthorKey,
+				", Author:", record.AuthorAccountID,
 				", Author Display Name:", authorDisplayName,
 				", Summary:", record.Summary,
 				", Category:", record.Category,
@@ -1126,7 +1100,7 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				map[string]interface{}{
 					"_record_id":           record.ID,
 					"_created":             record.Created,
-					"_author":              record.AuthorKey,
+					"_author":              record.AuthorAccountID,
 					"_author_display_name": authorDisplayName,
 					"_summary":             record.Summary,
 					"_category":            record.Category,

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ctreminiom/go-atlassian/pkg/infra/models"
+	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
 	"go.uber.org/zap"
 )
 
@@ -327,13 +327,13 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:            1,
-					Summary:       "User created",
-					AuthorKey:     "jdoe",
-					Created:       "2024-06-01T10:00:00.000+0000",
-					Category:      "user management",
-					RemoteAddress: "192.0.2.1",
-					ObjectItem:    nil,
+					ID:              1,
+					Summary:         "User created",
+					AuthorAccountID: "jdoe-account-id",
+					Created:         "2024-06-01T10:00:00.000+0000",
+					Category:        "user management",
+					RemoteAddress:   "192.0.2.1",
+					ObjectItem:      nil,
 				},
 			},
 		},
@@ -346,11 +346,11 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:        2,
-					Summary:   "Project created",
-					AuthorKey: "admin",
-					Created:   "2024-06-02T08:00:00.000+0000",
-					Category:  "project",
+					ID:              2,
+					Summary:         "Project created",
+					AuthorAccountID: "admin-account-id",
+					Created:         "2024-06-02T08:00:00.000+0000",
+					Category:        "project",
 					ObjectItem: &models.AuditRecordObjectItemScheme{
 						Name:     "MyProject",
 						TypeName: "PROJECT",
@@ -367,10 +367,10 @@ func TestProcessJiraAuditRecords_Empty(t *testing.T) {
 	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil)
 }
 
-// TestProcessJiraAuditRecords_UGPrefixAuthorResolved checks that when AuthorKey
-// is in "ug:UUID" format and a resolver is provided, the resolver is called and
-// the display name is surfaced.
-func TestProcessJiraAuditRecords_UGPrefixAuthorResolved(t *testing.T) {
+// TestProcessJiraAuditRecords_AuthorAccountIDResolved checks that when AuthorAccountID
+// is populated and a resolver is provided, the resolver is called and the display
+// name is surfaced.
+func TestProcessJiraAuditRecords_AuthorAccountIDResolved(t *testing.T) {
 	const wantName = "Alice Cloud"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -384,11 +384,11 @@ func TestProcessJiraAuditRecords_UGPrefixAuthorResolved(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:        10,
-					Summary:   "User login",
-					AuthorKey: "ug:58da8718-09f4-4f36-9d83-3ae82796ae3e",
-					Created:   "2024-06-01T10:00:00.000+0000",
-					Category:  "user management",
+					ID:              10,
+					Summary:         "User login",
+					AuthorAccountID: "58da8718-09f4-4f36-9d83-3ae82796ae3e",
+					Created:         "2024-06-01T10:00:00.000+0000",
+					Category:        "user management",
 				},
 			},
 		},
@@ -396,9 +396,9 @@ func TestProcessJiraAuditRecords_UGPrefixAuthorResolved(t *testing.T) {
 	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
 }
 
-// TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver checks that a plain
-// username (no "ug:" prefix) does not trigger resolver calls.
-func TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver(t *testing.T) {
+// TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver checks that an
+// empty AuthorAccountID does not trigger resolver calls.
+func TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -413,11 +413,10 @@ func TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver(t *testing.T) {
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:        11,
-					Summary:   "Group updated",
-					AuthorKey: "jdoe",
-					Created:   "2024-06-01T12:00:00.000+0000",
-					Category:  "group management",
+					ID:       11,
+					Summary:  "Group updated",
+					Created:  "2024-06-01T12:00:00.000+0000",
+					Category: "group management",
 				},
 			},
 		},
@@ -425,22 +424,22 @@ func TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver(t *testing.T) {
 	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
 
 	if called {
-		t.Error("resolver should not be called for non-ug: author keys")
+		t.Error("resolver should not be called when AuthorAccountID is empty")
 	}
 }
 
-// TestProcessJiraAuditRecords_NilResolverUGAuthor checks that a nil resolver
-// with a ug:-prefixed AuthorKey does not panic.
-func TestProcessJiraAuditRecords_NilResolverUGAuthor(t *testing.T) {
+// TestProcessJiraAuditRecords_NilResolverAuthorAccountID checks that a nil resolver
+// with a populated AuthorAccountID does not panic.
+func TestProcessJiraAuditRecords_NilResolverAuthorAccountID(t *testing.T) {
 	pages := []*models.AuditRecordPageScheme{
 		{
 			Records: []*models.AuditRecordScheme{
 				{
-					ID:        12,
-					Summary:   "User login",
-					AuthorKey: "ug:some-uuid",
-					Created:   "2024-06-01T13:00:00.000+0000",
-					Category:  "user management",
+					ID:              12,
+					Summary:         "User login",
+					AuthorAccountID: "some-account-id",
+					Created:         "2024-06-01T13:00:00.000+0000",
+					Category:        "user management",
 				},
 			},
 		},
@@ -847,17 +846,17 @@ func TestJiraUserResolver_Success(t *testing.T) {
 	}
 }
 
-func TestJiraUserResolver_StripUGPrefix(t *testing.T) {
+func TestJiraUserResolver_CleanAccountID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("accountId"); got != "stripped-id" {
-			t.Errorf("ug: prefix was not stripped, accountId=%q", got)
+			t.Errorf("unexpected accountId=%q, want %q", got, "stripped-id")
 		}
 		_, _ = w.Write([]byte(`{"displayName":"Bob Jira"}`))
 	}))
 	defer server.Close()
 
 	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
-	got := resolver.resolve("ug:stripped-id")
+	got := resolver.resolve("stripped-id")
 	if got != "Bob Jira" {
 		t.Errorf("got %q, want %q", got, "Bob Jira")
 	}
