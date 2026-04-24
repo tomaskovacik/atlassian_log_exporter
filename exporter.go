@@ -469,31 +469,86 @@ func parseFlags() Config {
 	return config
 }
 
-// UserResolver resolves Atlassian account IDs to human-readable display names
-// by calling the Atlassian User Management API.  Resolved names are cached
-// in-memory to avoid redundant requests within a single run.
+// UserResolver resolves Atlassian account IDs to human-readable display names.
+// Resolved names are cached in-memory to avoid redundant requests within a
+// single run.  The resolver is generic: the API endpoint and authentication
+// strategy are supplied at construction time via buildRequest/extractName so
+// that both the Atlassian Admin API and the Jira REST API are supported without
+// code duplication.
 type UserResolver struct {
-	apiToken   string
-	httpClient *http.Client
-	mu         sync.RWMutex
-	cache      map[string]string
-	log        *zap.SugaredLogger
+	httpClient   *http.Client
+	mu           sync.RWMutex
+	cache        map[string]string
+	log          *zap.SugaredLogger
+	buildRequest func(id string) (*http.Request, error)
+	extractName  func(data []byte) (string, error)
 }
 
-// newUserResolver creates a UserResolver backed by the supplied HTTP client and
-// Atlassian API token (Bearer).
+// newUserResolver creates a UserResolver that resolves account IDs via the
+// Atlassian Admin User Management API
+// (GET https://api.atlassian.com/users/{id}/manage/profile) using Bearer auth.
+// Requires an Atlassian Guard subscription.
 func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
 	return &UserResolver{
-		apiToken:   apiToken,
 		httpClient: httpClient,
 		cache:      make(map[string]string),
 		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			req, err := http.NewRequest(http.MethodGet,
+				fmt.Sprintf("https://api.atlassian.com/users/%s/manage/profile", id), nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+apiToken)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var profile struct {
+				Account struct {
+					Name string `json:"name"`
+				} `json:"account"`
+			}
+			if err := json.Unmarshal(data, &profile); err != nil {
+				return "", err
+			}
+			return profile.Account.Name, nil
+		},
+	}
+}
+
+// newJiraUserResolver creates a UserResolver that resolves account IDs via the
+// Jira Cloud REST API (GET {jiraURL}/rest/api/2/user?accountId=...) using Basic
+// Auth.  This does not require an Atlassian Guard subscription — the same
+// credentials used to fetch Jira audit records are sufficient.
+func newJiraUserResolver(jiraURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			u := jiraURL + "/rest/api/2/user?accountId=" + url.QueryEscape(id)
+			req, err := http.NewRequest(http.MethodGet, u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(email, token)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var user struct {
+				DisplayName string `json:"displayName"`
+			}
+			if err := json.Unmarshal(data, &user); err != nil {
+				return "", err
+			}
+			return user.DisplayName, nil
+		},
 	}
 }
 
 // resolve looks up the display name for an Atlassian account ID.  It strips the
-// "ug:" prefix that appears in admin audit log actor IDs before querying the
-// API.  Returns an empty string when the name cannot be determined.
+// "ug:" prefix that appears in audit log actor IDs before querying the API.
+// Returns an empty string when the name cannot be determined.
 func (r *UserResolver) resolve(accountID string) string {
 	id := strings.TrimPrefix(accountID, "ug:")
 	if id == "" {
@@ -507,13 +562,11 @@ func (r *UserResolver) resolve(accountID string) string {
 		return name
 	}
 
-	reqURL := fmt.Sprintf("https://api.atlassian.com/users/%s/manage/profile", id)
-	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	req, err := r.buildRequest(id)
 	if err != nil {
 		r.log.Warnf("UserResolver: failed to create request for %s: %v", id, err)
 		return ""
 	}
-	req.Header.Set("Authorization", "Bearer "+r.apiToken)
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
@@ -527,20 +580,22 @@ func (r *UserResolver) resolve(accountID string) string {
 		return ""
 	}
 
-	var profile struct {
-		Account struct {
-			Name string `json:"name"`
-		} `json:"account"`
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		r.log.Warnf("UserResolver: read failed for %s: %v", id, err)
+		return ""
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+
+	name, err = r.extractName(data)
+	if err != nil {
 		r.log.Warnf("UserResolver: decode failed for %s: %v", id, err)
 		return ""
 	}
 
 	r.mu.Lock()
-	r.cache[id] = profile.Account.Name
+	r.cache[id] = name
 	r.mu.Unlock()
-	return profile.Account.Name
+	return name
 }
 
 func initCloudAdmin(config Config, log *zap.SugaredLogger) (*admin.Client, error) {
@@ -1098,12 +1153,7 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		log.Errorf("Error parsing last record date %q: %v", lastRecord.Created, err)
 	}
 
-	var jiraResolver *UserResolver
-	if config.APIToken != "" {
-		jiraResolver = newUserResolver(config.APIToken, &http.Client{}, log)
-	} else {
-		log.Warn("api_token not set: author display name resolution is disabled for ug:-prefixed author keys")
-	}
+	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
 	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)

@@ -374,14 +374,11 @@ func TestProcessJiraAuditRecords_UGPrefixAuthorResolved(t *testing.T) {
 	const wantName = "Alice Cloud"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"account":{"name":"` + wantName + `"}}`))
+		_, _ = w.Write([]byte(`{"displayName":"` + wantName + `"}`))
 	}))
 	defer server.Close()
 
-	resolver := newUserResolver("tok", &http.Client{}, nopLogger())
-	resolver.httpClient = &http.Client{
-		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
-	}
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
 
 	pages := []*models.AuditRecordPageScheme{
 		{
@@ -406,14 +403,11 @@ func TestProcessJiraAuditRecords_NonUGAuthorSkipsResolver(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"account":{"name":"Should Not Resolve"}}`))
+		_, _ = w.Write([]byte(`{"displayName":"Should Not Resolve"}`))
 	}))
 	defer server.Close()
 
-	resolver := newUserResolver("tok", &http.Client{}, nopLogger())
-	resolver.httpClient = &http.Client{
-		Transport: rewriteHostTransport{base: server.URL, wrapped: http.DefaultTransport},
-	}
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
 
 	pages := []*models.AuditRecordPageScheme{
 		{
@@ -814,8 +808,52 @@ func TestProcessEvents_WithResolver(t *testing.T) {
 	processEvents(chunks, nopLogger(), nil, "", resolver)
 }
 
-// rewriteHostTransport replaces the host in outgoing requests with the base URL
-// of a test server, allowing tests to intercept API calls without DNS changes.
+// ---------- JiraUserResolver ----------
+
+func TestJiraUserResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method %s", r.Method)
+		}
+		if r.URL.Path != "/rest/api/2/user" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("accountId"); got != "abc123" {
+			t.Errorf("unexpected accountId query param %q", got)
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "user@example.com" || pass != "secret" {
+			t.Errorf("unexpected basic auth user=%q pass=%q ok=%v", user, pass, ok)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"displayName":"Alice Jira"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "secret", server.Client(), nopLogger())
+	got := resolver.resolve("abc123")
+	if got != "Alice Jira" {
+		t.Errorf("got %q, want %q", got, "Alice Jira")
+	}
+}
+
+func TestJiraUserResolver_StripUGPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("accountId"); got != "stripped-id" {
+			t.Errorf("ug: prefix was not stripped, accountId=%q", got)
+		}
+		_, _ = w.Write([]byte(`{"displayName":"Bob Jira"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL, "user@example.com", "token", server.Client(), nopLogger())
+	got := resolver.resolve("ug:stripped-id")
+	if got != "Bob Jira" {
+		t.Errorf("got %q, want %q", got, "Bob Jira")
+	}
+}
+
+
 type rewriteHostTransport struct {
 	base    string // e.g. "http://127.0.0.1:PORT"
 	wrapped http.RoundTripper
