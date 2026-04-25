@@ -12,6 +12,7 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 - Handles API rate limiting
 - Logs events to console and optionally to a file
 - Sends events to Graylog via GELF (UDP or TCP) for centralised log management
+- Sends events to Fluent Bit via HTTP for flexible log pipeline routing
 - Persists the last processed event date to resume from where it left off
 - Configurable via command-line flags, environment variables, or a YAML configuration file
 
@@ -111,6 +112,10 @@ Run the application with the following command:
 - `-gelf-host`: Graylog server hostname or IP (env: `GELF_HOST`)
 - `-gelf-port`: Graylog GELF input port (default `12201`)
 - `-gelf-protocol`: Transport protocol `udp` (default) or `tcp`
+- `-fluentbit-enabled`: Enable Fluent Bit HTTP output
+- `-fluentbit-host`: Fluent Bit HTTP input hostname (env: `FLUENTBIT_HOST`)
+- `-fluentbit-port`: Fluent Bit HTTP input port (default `9880`)
+- `-fluentbit-tag`: Tag / URL path segment appended to the endpoint (env: `FLUENTBIT_TAG`; defaults to the source name)
 
 #### Admin source flags
 
@@ -149,6 +154,8 @@ Run the application with the following command:
 | `ATLASSIAN_EMAIL`           | Atlassian account email (jira/confluence)|
 | `ATLASSIAN_TOKEN`           | Atlassian personal API token (jira/confluence)|
 | `GELF_HOST`                 | Graylog GELF server hostname or IP       |
+| `FLUENTBIT_HOST`            | Fluent Bit HTTP input hostname           |
+| `FLUENTBIT_TAG`             | Fluent Bit tag / URL path segment        |
 
 ## Required Token Scopes / Permissions
 
@@ -230,10 +237,14 @@ CLI flags override anything set in the file:
 | `confluence_url`  | `-confluence-url`    | `CONFLUENCE_URL`            | Confluence site URL |
 | `atlassian_email` | `-atlassian-email`   | `ATLASSIAN_EMAIL`           | Atlassian account email |
 | `atlassian_token` | `-atlassian-token`   | `ATLASSIAN_TOKEN`           | Atlassian personal API token |
-| `gelf_enabled`    | `-gelf-enabled`      | —                           | Enable GELF output to Graylog |
-| `gelf_host`       | `-gelf-host`         | `GELF_HOST`                 | Graylog GELF server hostname or IP |
-| `gelf_port`       | `-gelf-port`         | —                           | Graylog GELF port (default 12201) |
-| `gelf_protocol`   | `-gelf-protocol`     | —                           | GELF transport: `udp` (default) or `tcp` |
+| `gelf_enabled`        | `-gelf-enabled`          | —                           | Enable GELF output to Graylog |
+| `gelf_host`           | `-gelf-host`             | `GELF_HOST`                 | Graylog GELF server hostname or IP |
+| `gelf_port`           | `-gelf-port`             | —                           | Graylog GELF port (default 12201) |
+| `gelf_protocol`       | `-gelf-protocol`         | —                           | GELF transport: `udp` (default) or `tcp` |
+| `fluentbit_enabled`   | `-fluentbit-enabled`     | —                           | Enable Fluent Bit HTTP output |
+| `fluentbit_host`      | `-fluentbit-host`        | `FLUENTBIT_HOST`            | Fluent Bit HTTP input hostname |
+| `fluentbit_port`      | `-fluentbit-port`        | —                           | Fluent Bit HTTP input port (default 9880) |
+| `fluentbit_tag`       | `-fluentbit-tag`         | `FLUENTBIT_TAG`             | Tag / URL path segment (defaults to source name) |
 
 ## Examples
 
@@ -354,6 +365,32 @@ gelf_host: graylog.example.com
 gelf_port: 12201
 gelf_protocol: udp
 ```
+
+## Fluent Bit HTTP output
+
+When `-fluentbit-enabled` is set, every audit event is forwarded to a [Fluent Bit HTTP input plugin](https://docs.fluentbit.io/manual/pipeline/inputs/http) as a JSON object via HTTP POST. The Fluent Bit tag (used as the URL path segment) defaults to the source name (`admin`, `bitbucket`, `jira`, or `confluence`) and can be overridden with `-fluentbit-tag`. GELF-style leading `_` prefixes are stripped from field names so that Fluent Bit records have clean keys (e.g. `source`, `action`, `actor_name`).
+
+```sh
+./atlassian_log_exporter \
+  -source=admin \
+  -api_token=your_token \
+  -org_id=your_org \
+  -fluentbit-enabled \
+  -fluentbit-host=fluentbit.example.com \
+  -fluentbit-port=9880 \
+  -fluentbit-tag=atlassian-audit
+```
+
+Or via YAML:
+
+```yaml
+fluentbit_enabled: true
+fluentbit_host: fluentbit.example.com
+fluentbit_port: 9880
+fluentbit_tag: atlassian-audit   # optional; defaults to source name
+```
+
+Both GELF and Fluent Bit outputs can be enabled at the same time.
 
 ## Contributing
 
