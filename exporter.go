@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -47,10 +48,14 @@ type Config struct {
 	ConfluenceURL  string
 	AtlassianEmail string
 	AtlassianToken string
-	GELFEnabled    bool
-	GELFHost       string
-	GELFPort       int
-	GELFProtocol   string
+	GELFEnabled       bool
+	GELFHost          string
+	GELFPort          int
+	GELFProtocol      string
+	FluentBitEnabled  bool
+	FluentBitHost     string
+	FluentBitPort     int
+	FluentBitTag      string
 }
 
 // YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
@@ -74,10 +79,14 @@ type YAMLConfig struct {
 	ConfluenceURL  string `yaml:"confluence_url"`
 	AtlassianEmail string `yaml:"atlassian_email"`
 	AtlassianToken string `yaml:"atlassian_token"`
-	GELFEnabled    *bool  `yaml:"gelf_enabled"`
-	GELFHost       string `yaml:"gelf_host"`
-	GELFPort       int    `yaml:"gelf_port"`
-	GELFProtocol   string `yaml:"gelf_protocol"`
+	GELFEnabled       *bool  `yaml:"gelf_enabled"`
+	GELFHost          string `yaml:"gelf_host"`
+	GELFPort          int    `yaml:"gelf_port"`
+	GELFProtocol      string `yaml:"gelf_protocol"`
+	FluentBitEnabled  *bool  `yaml:"fluentbit_enabled"`
+	FluentBitHost     string `yaml:"fluentbit_host"`
+	FluentBitPort     int    `yaml:"fluentbit_port"`
+	FluentBitTag      string `yaml:"fluentbit_tag"`
 }
 
 // loadYAMLConfig reads a YAML configuration file and returns a YAMLConfig.
@@ -156,6 +165,18 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	}
 	if override.GELFProtocol != "" {
 		base.GELFProtocol = override.GELFProtocol
+	}
+	if override.FluentBitEnabled != nil {
+		base.FluentBitEnabled = override.FluentBitEnabled
+	}
+	if override.FluentBitHost != "" {
+		base.FluentBitHost = override.FluentBitHost
+	}
+	if override.FluentBitPort != 0 {
+		base.FluentBitPort = override.FluentBitPort
+	}
+	if override.FluentBitTag != "" {
+		base.FluentBitTag = override.FluentBitTag
 	}
 	return base
 }
@@ -368,6 +389,68 @@ func sendGELF(w GELFWriter, host, short string, ts time.Time, extra map[string]i
 	}
 }
 
+// FluentBitClient sends audit events to a Fluent Bit HTTP input plugin.
+type FluentBitClient struct {
+	httpClient *http.Client
+	url        string
+	log        *zap.SugaredLogger
+}
+
+// initFluentBit creates a FluentBitClient that posts JSON events to the
+// configured Fluent Bit HTTP input.  Returns nil when Fluent Bit is disabled.
+// The tag (URL path segment) defaults to the source name when not set.
+func initFluentBit(config Config, log *zap.SugaredLogger) *FluentBitClient {
+	if !config.FluentBitEnabled {
+		return nil
+	}
+
+	tag := config.FluentBitTag
+	if tag == "" {
+		tag = config.Source
+	}
+
+	addr := fmt.Sprintf("http://%s:%d/%s", config.FluentBitHost, config.FluentBitPort, tag)
+	log.Infof("Fluent Bit HTTP output enabled, sending to %s", addr)
+	return &FluentBitClient{
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		url:        addr,
+		log:        log,
+	}
+}
+
+// sendFluentBit serialises data as JSON and POSTs it to the Fluent Bit HTTP
+// input endpoint.  Keys are stripped of a leading underscore (GELF convention)
+// before sending so that Fluent Bit field names are clean.  A nil client is a
+// no-op so callers do not need to guard against it.
+func sendFluentBit(client *FluentBitClient, data map[string]interface{}, log *zap.SugaredLogger) {
+	if client == nil {
+		return
+	}
+
+	// Strip GELF-style leading underscore from field names.
+	clean := make(map[string]interface{}, len(data))
+	for k, v := range data {
+		clean[strings.TrimPrefix(k, "_")] = v
+	}
+
+	body, err := json.Marshal(clean)
+	if err != nil {
+		log.Warnf("Failed to marshal Fluent Bit message: %v", err)
+		return
+	}
+
+	resp, err := client.httpClient.Post(client.url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Warnf("Failed to send Fluent Bit message: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		log.Warnf("Fluent Bit returned unexpected status %d", resp.StatusCode)
+	}
+}
+
 func parseFlags() Config {
 	// Pre-scan os.Args for -config / --config so we can load the YAML file
 	// before registering flag defaults. We do not call flag.Parse() yet.
@@ -402,6 +485,8 @@ func parseFlags() Config {
 		AtlassianToken: os.Getenv("ATLASSIAN_TOKEN"),
 		GELFHost:       os.Getenv("GELF_HOST"),
 		GELFProtocol:   "udp",
+		FluentBitHost:  os.Getenv("FLUENTBIT_HOST"),
+		FluentBitTag:   os.Getenv("FLUENTBIT_TAG"),
 	}
 
 	if configFile != "" {
@@ -436,6 +521,10 @@ func parseFlags() Config {
 	flag.StringVar(&config.GELFHost, "gelf-host", base.GELFHost, "Graylog GELF host (env: GELF_HOST)")
 	flag.IntVar(&config.GELFPort, "gelf-port", base.GELFPort, "Graylog GELF port (default 12201)")
 	flag.StringVar(&config.GELFProtocol, "gelf-protocol", base.GELFProtocol, "Graylog GELF protocol: udp or tcp (default: udp)")
+	flag.BoolVar(&config.FluentBitEnabled, "fluentbit-enabled", boolVal(base.FluentBitEnabled), "Enable Fluent Bit HTTP output")
+	flag.StringVar(&config.FluentBitHost, "fluentbit-host", base.FluentBitHost, "Fluent Bit HTTP input host (env: FLUENTBIT_HOST)")
+	flag.IntVar(&config.FluentBitPort, "fluentbit-port", base.FluentBitPort, "Fluent Bit HTTP input port (default 9880)")
+	flag.StringVar(&config.FluentBitTag, "fluentbit-tag", base.FluentBitTag, "Fluent Bit tag / URL path (env: FLUENTBIT_TAG; default: source name)")
 	flag.String("config", "", "(Optional) Path to YAML configuration file")
 
 	flag.Parse()
@@ -447,6 +536,17 @@ func parseFlags() Config {
 
 	if config.GELFEnabled && config.GELFHost == "" {
 		fmt.Fprintln(os.Stderr, "gelf-enabled requires -gelf-host")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// Apply Fluent Bit port default.
+	if config.FluentBitPort == 0 {
+		config.FluentBitPort = 9880
+	}
+
+	if config.FluentBitEnabled && config.FluentBitHost == "" {
+		fmt.Fprintln(os.Stderr, "fluentbit-enabled requires -fluentbit-host")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -847,7 +947,7 @@ func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLo
 	return retryAfter
 }
 
-func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
+func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, chunk := range eventChunks {
 		for _, event := range chunk.Data {
 			var locationIP string
@@ -887,23 +987,25 @@ func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.S
 			if err != nil {
 				ts = time.Now().UTC()
 			}
+			extra := map[string]interface{}{
+				"_event_id":           event.ID,
+				"_event_time":         event.Attributes.Time,
+				"_actor_id":           event.Attributes.Actor.ID,
+				"_actor_name":         event.Attributes.Actor.Name,
+				"_actor_display_name": actorDisplayName,
+				"_actor_link":         actorLink,
+				"_action":             event.Attributes.Action,
+				"_location_ip":        locationIP,
+				"_event_link":         eventLink,
+				"_source":             "admin",
+			}
 			sendGELF(gelfWriter, gelfHost,
 				fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
 				ts,
-				map[string]interface{}{
-					"_event_id":            event.ID,
-					"_event_time":          event.Attributes.Time,
-					"_actor_id":            event.Attributes.Actor.ID,
-					"_actor_name":          event.Attributes.Actor.Name,
-					"_actor_display_name":  actorDisplayName,
-					"_actor_link":          actorLink,
-					"_action":              event.Attributes.Action,
-					"_location_ip":         locationIP,
-					"_event_link":          eventLink,
-					"_source":              "admin",
-				},
+				extra,
 				log,
 			)
+			sendFluentBit(fluentBitClient, extra, log)
 		}
 	}
 }
@@ -996,7 +1098,7 @@ func handleBitbucketRateLimit(response *models.ResponseScheme, log *zap.SugaredL
 	return retryAfter
 }
 
-func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) {
 	for _, page := range pages {
 		for _, event := range page.Values {
 			log.Info(
@@ -1014,27 +1116,29 @@ func processBitbucketEvents(pages []BitbucketAuditPage, log *zap.SugaredLogger, 
 			if err != nil {
 				ts = time.Now().UTC()
 			}
+			extra := map[string]interface{}{
+				"_event_id":      event.ID,
+				"_event_date":    event.Date,
+				"_actor_uuid":    event.Actor.UUID,
+				"_actor_name":    event.Actor.DisplayName,
+				"_actor_account": event.Actor.AccountID,
+				"_action":        event.Action,
+				"_subject_type":  event.Subject.Type,
+				"_subject_name":  event.Subject.DisplayName,
+				"_source":        "bitbucket",
+			}
 			sendGELF(gelfWriter, gelfHost,
 				fmt.Sprintf("bitbucket audit: %s", event.Action),
 				ts,
-				map[string]interface{}{
-					"_event_id":      event.ID,
-					"_event_date":    event.Date,
-					"_actor_uuid":    event.Actor.UUID,
-					"_actor_name":    event.Actor.DisplayName,
-					"_actor_account": event.Actor.AccountID,
-					"_action":        event.Action,
-					"_subject_type":  event.Subject.Type,
-					"_subject_name":  event.Subject.DisplayName,
-					"_source":        "bitbucket",
-				},
+				extra,
 				log,
 			)
+			sendFluentBit(fluentBitClient, extra, log)
 		}
 	}
 }
 
-func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
+func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
 	stateFilename := "atlassian_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -1074,7 +1178,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, 
 		log.Errorf("Error getting last event time: %v", err)
 	}
 
-	processEvents(eventChunks, log, gelfWriter, config.GELFHost, newUserResolver(config.APIToken, &http.Client{}, log))
+	processEvents(eventChunks, log, gelfWriter, config.GELFHost, newUserResolver(config.APIToken, &http.Client{}, log), fluentBitClient)
 
 	log.Debugf("Last event time: %v, eventChunks[0].Data[0].Attributes.Time: %s", state.LastEventDate, eventChunks[0].Data[0].Attributes.Time)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1082,7 +1186,7 @@ func runAdminSource(ctx context.Context, config Config, log *zap.SugaredLogger, 
 	}
 }
 
-func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
+func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
 	stateFilename := "bitbucket_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -1124,7 +1228,7 @@ func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogg
 		log.Errorf("Error parsing last event date %q: %v", pages[0].Values[0].Date, err)
 	}
 
-	processBitbucketEvents(pages, log, gelfWriter, config.GELFHost)
+	processBitbucketEvents(pages, log, gelfWriter, config.GELFHost, fluentBitClient)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1208,7 +1312,7 @@ type resolvedAssociatedItem struct {
 	ParentName   string
 }
 
-func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver) {
+func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
@@ -1324,8 +1428,6 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 			if err != nil {
 				ts = time.Now().UTC()
 			}
-
-			// Build GELF extra fields; expand arrays into indexed fields, skip empty values.
 			extra := map[string]interface{}{
 				"_record_id":           record.ID,
 				"_created":             record.Created,
@@ -1381,11 +1483,12 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				extra,
 				log,
 			)
+			sendFluentBit(fluentBitClient, extra, log)
 		}
 	}
 }
 
-func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
+func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
 	stateFilename := "jira_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -1428,7 +1531,7 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 
 	jiraMigrationResolver := newJiraBulkMigrationUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
 	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver, jiraMigrationResolver)
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver, jiraMigrationResolver, fluentBitClient)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1515,7 +1618,7 @@ func parseGroupUserName(name string) (groupID, userAccountID string) {
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 }
 
-func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, groupResolver *UserResolver, userResolver *UserResolver) {
+func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, groupResolver *UserResolver, userResolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, page := range pages {
 		for _, record := range page.Results {
 			createdMs := time.UnixMilli(record.CreationDate).UTC()
@@ -1595,11 +1698,12 @@ func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.Sugared
 				extra,
 				log,
 			)
+			sendFluentBit(fluentBitClient, extra, log)
 		}
 	}
 }
 
-func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter) {
+func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
 	stateFilename := "confluence_state.json"
 	state, err := loadState(stateFilename)
 	if err != nil {
@@ -1638,8 +1742,8 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
 
 	groupResolver := newConfluenceGroupResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	userResolver := newConfluenceUserResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost, groupResolver, userResolver)
+	cfUserResolver := newConfluenceUserResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost, groupResolver, cfUserResolver, fluentBitClient)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
@@ -1657,16 +1761,18 @@ func main() {
 		defer gelfWriter.Close()
 	}
 
+	fluentBitClient := initFluentBit(config, log)
+
 	ctx := context.Background()
 
 	switch config.Source {
 	case "admin":
-		runAdminSource(ctx, config, log, gelfWriter)
+		runAdminSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "bitbucket":
-		runBitbucketSource(ctx, config, log, gelfWriter)
+		runBitbucketSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "jira":
-		runJiraSource(ctx, config, log, gelfWriter)
+		runJiraSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "confluence":
-		runConfluenceSource(ctx, config, log, gelfWriter)
+		runConfluenceSource(ctx, config, log, gelfWriter, fluentBitClient)
 	}
 }
