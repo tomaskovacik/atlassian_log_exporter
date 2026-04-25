@@ -446,7 +446,7 @@ func sendFluentBit(client *FluentBitClient, data map[string]interface{}, log *za
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Warnf("Fluent Bit returned unexpected status %d", resp.StatusCode)
 	}
 }
