@@ -27,6 +27,39 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 >
 > This project uses a [custom fork of go-atlassian](https://github.com/tomaskovacik/go-atlassian) (`github.com/tomaskovacik/go-atlassian/v2 v2.11.1-kovo`) that adds `AuthorAccountID` to `AuditRecordScheme`. The `replace` directive in `go.mod` handles this automatically — no manual steps are required beyond the standard `go mod tidy`.
 
+## Docker
+
+Pre-built images are published to the GitHub Container Registry on every push to `main` and on every `v*` tag:
+
+```sh
+docker pull ghcr.io/tomaskovacik/atlassian_log_exporter:latest
+```
+
+Run with environment variables:
+
+```sh
+docker run --rm \
+  -e ATLASSIAN_ADMIN_API_TOKEN=your_token \
+  -e ATLASSIAN_ORGID=your_org_id \
+  ghcr.io/tomaskovacik/atlassian_log_exporter:latest
+```
+
+Mount a config file and a state directory for persistent state:
+
+```sh
+docker run --rm \
+  -v "$PWD/config.yaml:/config.yaml" \
+  -v "$PWD/state:/state" \
+  -w /state \
+  ghcr.io/tomaskovacik/atlassian_log_exporter:latest -config /config.yaml
+```
+
+To build the image locally:
+
+```sh
+docker build -t atlassian_log_exporter .
+```
+
 ## Installation
 
 1. Clone the repository:

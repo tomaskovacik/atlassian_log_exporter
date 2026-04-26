@@ -1,0 +1,10 @@
+.git
+.github
+*.md
+*.example
+*.test
+*.out
+atlassian_log_exporter
+.env
+go.work
+go.work.sum
