@@ -338,7 +338,7 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
 }
 
 func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
@@ -359,12 +359,12 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
 }
 
 func TestProcessJiraAuditRecords_Empty(t *testing.T) {
-	processJiraAuditRecords(nil, nopLogger(), nil, "", nil)
-	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil)
+	processJiraAuditRecords(nil, nopLogger(), nil, "", nil, nil)
+	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil, nil)
 }
 
 // TestProcessJiraAuditRecords_AuthorAccountIDResolved checks that when AuthorAccountID
@@ -393,7 +393,7 @@ func TestProcessJiraAuditRecords_AuthorAccountIDResolved(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil)
 }
 
 // TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver checks that an
@@ -421,7 +421,7 @@ func TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver(t *testing.T)
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil)
 
 	if called {
 		t.Error("resolver should not be called when AuthorAccountID is empty")
@@ -444,7 +444,167 @@ func TestProcessJiraAuditRecords_NilResolverAuthorAccountID(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+}
+
+// TestProcessJiraAuditRecords_UgUUIDAuthorUsesMigrationResolver verifies that a
+// ug:UUID AuthorAccountID is routed to the migration resolver, not the regular one.
+func TestProcessJiraAuditRecords_UgUUIDAuthorUsesMigrationResolver(t *testing.T) {
+	migrationCalls, regularCalls := 0, 0
+
+	migrationSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		migrationCalls++
+		_, _ = w.Write([]byte(`[{"key":"ug:ug-uuid-author","accountId":"acc-123","username":"alice_migration"}]`))
+	}))
+	defer migrationSrv.Close()
+
+	regularSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		regularCalls++
+		_, _ = w.Write([]byte(`{"displayName":"ShouldNotBeUsed"}`))
+	}))
+	defer regularSrv.Close()
+
+	migrationResolver := newJiraBulkMigrationUserResolver(migrationSrv.URL, "u", "t", migrationSrv.Client(), nopLogger())
+	regularResolver := newJiraUserResolver(regularSrv.URL, "u", "t", regularSrv.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{
+			ID:              20,
+			Summary:         "User login",
+			AuthorAccountID: "ug:ug-uuid-author",
+			Created:         "2024-06-01T10:00:00.000+0000",
+			Category:        "user management",
+		}},
+	}}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", regularResolver, migrationResolver)
+
+	if migrationCalls == 0 {
+		t.Error("migration resolver should have been called for ug:UUID author")
+	}
+	if regularCalls != 0 {
+		t.Errorf("regular resolver should not be called for ug:UUID author, got %d calls", regularCalls)
+	}
+}
+
+// TestProcessJiraAuditRecords_UgUUIDInChangedValues verifies that ug:UUID values in
+// ChangedFrom/ChangedTo are resolved via the migration resolver.
+func TestProcessJiraAuditRecords_UgUUIDInChangedValues(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`[{"key":"ug:cv-user","accountId":"acc-cv","username":"cv_user"}]`))
+	}))
+	defer server.Close()
+
+	migrationResolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{
+			ID:      30,
+			Summary: "Assignee changed",
+			Created: "2024-06-01T10:00:00.000+0000",
+			ChangedValues: []*models.AuditRecordChangedValueScheme{
+				{FieldName: "assignee", ChangedFrom: "ug:old-user-uuid", ChangedTo: "ug:new-user-uuid"},
+			},
+		}},
+	}}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+
+	// Two distinct IDs → two API calls (cache misses).
+	if calls == 0 {
+		t.Error("migration resolver should have been called for ug:UUID in ChangedValues")
+	}
+}
+
+// TestProcessJiraAuditRecords_UgUUIDInObjectItemID verifies that a ug:UUID in
+// ObjectItem.ID is resolved via the migration resolver.
+func TestProcessJiraAuditRecords_UgUUIDInObjectItemID(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`[{"key":"ug:obj-user","accountId":"acc-obj","username":"obj_user"}]`))
+	}))
+	defer server.Close()
+
+	migrationResolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{
+			ID:      40,
+			Summary: "User modified",
+			Created: "2024-06-01T10:00:00.000+0000",
+			ObjectItem: &models.AuditRecordObjectItemScheme{
+				ID:       "ug:obj-user",
+				Name:     "obj.user@example.com",
+				TypeName: "USER",
+			},
+		}},
+	}}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+
+	if calls == 0 {
+		t.Error("migration resolver should have been called for ug:UUID in ObjectItem.ID")
+	}
+}
+
+// TestProcessJiraAuditRecords_UgUUIDInAssociatedItems verifies that a ug:UUID in
+// AssociatedItems[*].ID is resolved via the migration resolver.
+func TestProcessJiraAuditRecords_UgUUIDInAssociatedItems(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`[{"key":"ug:assoc-user","accountId":"acc-assoc","username":"assoc_user"}]`))
+	}))
+	defer server.Close()
+
+	migrationResolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{
+			ID:      50,
+			Summary: "Group membership changed",
+			Created: "2024-06-01T10:00:00.000+0000",
+			AssociatedItems: []*models.AuditRecordAssociatedItemScheme{
+				{ID: "ug:assoc-user", Name: "assoc.user@example.com", TypeName: "USER"},
+			},
+		}},
+	}}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+
+	if calls == 0 {
+		t.Error("migration resolver should have been called for ug:UUID in AssociatedItems ID")
+	}
+}
+
+// TestProcessJiraAuditRecords_UgUUIDInAssocItemsName verifies that a ug:UUID in
+// AssociatedItems[*].Name is also resolved via the migration resolver.  This
+// mirrors the real Jira API behaviour where both id and name echo the same ug:UUID.
+func TestProcessJiraAuditRecords_UgUUIDInAssocItemsName(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`[{"key":"ug:name-user","accountId":"acc-name","username":"name_user"}]`))
+	}))
+	defer server.Close()
+
+	migrationResolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{
+			ID:      51,
+			Summary: "User added to group",
+			Created: "2024-06-01T10:00:00.000+0000",
+			AssociatedItems: []*models.AuditRecordAssociatedItemScheme{
+				// Both id and name carry the ug:UUID (as Jira sometimes returns).
+				{ID: "ug:name-user", Name: "ug:name-user", TypeName: "USER"},
+			},
+		}},
+	}}
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+
+	if calls == 0 {
+		t.Error("migration resolver should have been called for ug:UUID in AssociatedItems Name")
+	}
 }
 
 // ---------- processConfluenceAuditRecords ----------
@@ -470,13 +630,222 @@ func TestProcessConfluenceAuditRecords_NoPanic(t *testing.T) {
 			},
 		},
 	}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "")
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
 }
 
 func TestProcessConfluenceAuditRecords_Empty(t *testing.T) {
-	processConfluenceAuditRecords(nil, nopLogger(), nil, "")
-	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger(), nil, "")
-	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger(), nil, "")
+	processConfluenceAuditRecords(nil, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger(), nil, "", nil, nil)
+}
+
+func TestProcessConfluenceAuditRecords_WithChangedValues(t *testing.T) {
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{{
+			Author:       ConfluenceAuditAuthor{DisplayName: "Alice", AccountID: "acc-alice"},
+			CreationDate: 1717228800000,
+			Summary:      "Space permissions updated",
+			Category:     "permissions",
+			ChangedValues: []ConfluenceChangedValue{
+				{Name: "View", OldValue: "false", NewValue: "true"},
+				{Name: "Edit", OldValue: "true", NewValue: "false"},
+			},
+		}},
+	}}
+	// Must not panic and must process both changed values.
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+}
+
+func TestProcessConfluenceAuditRecords_WithAssociatedObjects(t *testing.T) {
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{{
+			Author:       ConfluenceAuditAuthor{DisplayName: "Bob", AccountID: "acc-bob"},
+			CreationDate: 1717228800000,
+			Summary:      "Page moved",
+			Category:     "content",
+			AssociatedObjects: []ConfluenceAssociatedObject{
+				{Name: "Engineering", ObjectType: "Space"},
+				{Name: "My Page", ObjectType: "Page"},
+			},
+		}},
+	}}
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+}
+
+func TestProcessConfluenceAuditRecords_ChangedValuesAndAssociatedObjects(t *testing.T) {
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{{
+			Author:       ConfluenceAuditAuthor{DisplayName: "Carol", AccountID: "acc-carol"},
+			CreationDate: 1717228800000,
+			Summary:      "User added to space",
+			Category:     "permissions",
+			AffectedObject: ConfluenceAuditObject{Name: "Engineering", ObjectType: "Space"},
+			ChangedValues: []ConfluenceChangedValue{
+				{Name: "Role", OldValue: "", NewValue: "contributor"},
+			},
+			AssociatedObjects: []ConfluenceAssociatedObject{
+				{Name: "carol@example.com", ObjectType: "User"},
+			},
+		}},
+	}}
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+}
+
+// ---------- parseGroupUserName ----------
+
+func TestParseGroupUserName_ValidPattern(t *testing.T) {
+	groupID, userID := parseGroupUserName("e3d93ec5-456e-4f9f-8a75-17196dd84e00; User: 712020:bf43f3d5-be22-4709-8312-1af251228d9d")
+	if groupID != "e3d93ec5-456e-4f9f-8a75-17196dd84e00" {
+		t.Errorf("groupID: got %q, want UUID", groupID)
+	}
+	if userID != "712020:bf43f3d5-be22-4709-8312-1af251228d9d" {
+		t.Errorf("userID: got %q, want account ID", userID)
+	}
+}
+
+func TestParseGroupUserName_NoPattern(t *testing.T) {
+	groupID, userID := parseGroupUserName("Engineering")
+	if groupID != "" || userID != "" {
+		t.Errorf("expected empty strings for plain name, got %q %q", groupID, userID)
+	}
+}
+
+func TestParseGroupUserName_EmptyString(t *testing.T) {
+	groupID, userID := parseGroupUserName("")
+	if groupID != "" || userID != "" {
+		t.Errorf("expected empty strings for empty input, got %q %q", groupID, userID)
+	}
+}
+
+// ---------- ConfluenceGroupResolver ----------
+
+func TestConfluenceGroupResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/api/group/by-id" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("id"); got != "e3d93ec5-0000-0000-0000-000000000000" {
+			t.Errorf("unexpected id param %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":"e3d93ec5-0000-0000-0000-000000000000","name":"engineering-team","type":"group"}`))
+	}))
+	defer server.Close()
+
+	resolver := newConfluenceGroupResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("e3d93ec5-0000-0000-0000-000000000000")
+	if got != "engineering-team" {
+		t.Errorf("got %q, want %q", got, "engineering-team")
+	}
+}
+
+func TestConfluenceGroupResolver_Cache(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"name":"cached-group"}`))
+	}))
+	defer server.Close()
+
+	resolver := newConfluenceGroupResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	resolver.resolve("group-uuid")
+	resolver.resolve("group-uuid")
+	if calls != 1 {
+		t.Errorf("expected 1 API call due to caching, got %d", calls)
+	}
+}
+
+// ---------- ConfluenceUserResolver ----------
+
+func TestConfluenceUserResolver_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/api/user" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("accountId"); got != "712020:abc" {
+			t.Errorf("unexpected accountId param %q", got)
+		}
+		_, _ = w.Write([]byte(`{"accountId":"712020:abc","displayName":"Diana Rybanska"}`))
+	}))
+	defer server.Close()
+
+	resolver := newConfluenceUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("712020:abc")
+	if got != "Diana Rybanska" {
+		t.Errorf("got %q, want %q", got, "Diana Rybanska")
+	}
+}
+
+// ---------- processConfluenceAuditRecords with resolvers ----------
+
+func TestProcessConfluenceAuditRecords_GroupUserResolution(t *testing.T) {
+	const groupName = "engineering-team"
+	const userName = "Diana Rybanska"
+	groupCalls, userCalls := 0, 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/rest/api/group/by-id":
+			groupCalls++
+			_, _ = w.Write([]byte(`{"name":"` + groupName + `"}`))
+		case "/rest/api/user":
+			userCalls++
+			_, _ = w.Write([]byte(`{"displayName":"` + userName + `"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	groupResolver := newConfluenceGroupResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	userResolver := newConfluenceUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{{
+			Author:       ConfluenceAuditAuthor{DisplayName: "Admin"},
+			CreationDate: 1717228800000,
+			Summary:      "User removed from group",
+			Category:     "group management",
+			AffectedObject: ConfluenceAuditObject{
+				Name:       "e3d93ec5-456e-4f9f-8a75-17196dd84e00; User: 712020:bf43f3d5-be22-4709-8312-1af251228d9d",
+				ObjectType: "Group",
+			},
+		}},
+	}}
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver)
+
+	if groupCalls == 0 {
+		t.Error("group resolver should have been called")
+	}
+	if userCalls == 0 {
+		t.Error("user resolver should have been called")
+	}
+}
+
+func TestProcessConfluenceAuditRecords_PlainAffectedObjectSkipsResolvers(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	groupResolver := newConfluenceGroupResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	userResolver := newConfluenceUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{{
+			Author:         ConfluenceAuditAuthor{DisplayName: "Admin"},
+			CreationDate:   1717228800000,
+			Summary:        "Space created",
+			AffectedObject: ConfluenceAuditObject{Name: "Engineering", ObjectType: "Space"},
+		}},
+	}}
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver)
+
+	if called {
+		t.Error("resolvers should not be called when affectedObject.name has no '; User: ' pattern")
+	}
 }
 
 // ---------- fetchBitbucketEvents query building ----------
@@ -862,6 +1231,69 @@ func TestJiraUserResolver_CleanAccountID(t *testing.T) {
 	}
 }
 
+
+// ---------- JiraBulkMigrationUserResolver ----------
+
+// TestJiraBulkMigrationResolver_UsernamePresent verifies the happy path for
+// Jira Server/DC where the bulk migration API returns a non-empty username.
+func TestJiraBulkMigrationResolver_UsernamePresent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"key":"ug:abc","accountId":"acc-abc","username":"jdoe"}]`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("ug:abc")
+	if got != "jdoe" {
+		t.Errorf("got %q, want %q", got, "jdoe")
+	}
+}
+
+// TestJiraBulkMigrationResolver_EmptyUsername_FallsBackToUserAPI verifies the
+// Jira Cloud path: bulk migration returns an empty username but a valid accountId,
+// so the resolver must do a second call to the Jira user API to get the displayName.
+func TestJiraBulkMigrationResolver_EmptyUsername_FallsBackToUserAPI(t *testing.T) {
+	const wantName = "Alice Cloud"
+	const accountID = "cloud-account-id"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/rest/api/3/user/bulk/migration":
+			_, _ = w.Write([]byte(`[{"key":"ug:cloud-uuid","accountId":"` + accountID + `","username":""}]`))
+		case "/rest/api/2/user":
+			if r.URL.Query().Get("accountId") == accountID {
+				_, _ = w.Write([]byte(`{"displayName":"` + wantName + `"}`))
+			} else {
+				w.WriteHeader(http.StatusNotFound)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	resolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("ug:cloud-uuid")
+	if got != wantName {
+		t.Errorf("got %q, want %q", got, wantName)
+	}
+}
+
+// TestJiraBulkMigrationResolver_EmptyResponse returns empty string when no users found.
+func TestJiraBulkMigrationResolver_EmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraBulkMigrationUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("ug:nonexistent")
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
 
 type rewriteHostTransport struct {
 	base    string // e.g. "http://127.0.0.1:PORT"

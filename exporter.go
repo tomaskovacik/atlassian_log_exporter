@@ -218,16 +218,32 @@ type ConfluenceAuditObject struct {
 	ObjectType string `json:"objectType"`
 }
 
+// ConfluenceChangedValue represents a single field change within a Confluence audit record.
+type ConfluenceChangedValue struct {
+	Name     string `json:"name"`
+	OldValue string `json:"oldValue"`
+	NewValue string `json:"newValue"`
+}
+
+// ConfluenceAssociatedObject represents a related entity referenced in a Confluence audit record.
+type ConfluenceAssociatedObject struct {
+	Name       string `json:"name"`
+	ObjectType string `json:"objectType"`
+}
+
 // ConfluenceAuditRecord represents a single Confluence audit record.
 type ConfluenceAuditRecord struct {
-	Author         ConfluenceAuditAuthor `json:"author"`
-	RemoteAddress  string                `json:"remoteAddress"`
-	CreationDate   int64                 `json:"creationDate"`
-	Summary        string                `json:"summary"`
-	Description    string                `json:"description"`
-	Category       string                `json:"category"`
-	SysAdmin       bool                  `json:"sysAdmin"`
-	AffectedObject ConfluenceAuditObject `json:"affectedObject"`
+	Author            ConfluenceAuditAuthor        `json:"author"`
+	RemoteAddress     string                       `json:"remoteAddress"`
+	CreationDate      int64                        `json:"creationDate"`
+	Summary           string                       `json:"summary"`
+	Description       string                       `json:"description"`
+	Category          string                       `json:"category"`
+	SysAdmin          bool                         `json:"sysAdmin"`
+	SuperAdmin        bool                         `json:"superAdmin"`
+	AffectedObject    ConfluenceAuditObject        `json:"affectedObject"`
+	ChangedValues     []ConfluenceChangedValue     `json:"changedValues"`
+	AssociatedObjects []ConfluenceAssociatedObject `json:"associatedObjects"`
 }
 
 // ConfluenceAuditLinks represents the pagination links in a Confluence audit response.
@@ -517,10 +533,18 @@ func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredL
 }
 
 // newJiraBulkMigrationUserResolver creates a UserResolver that resolves
-// "ug:UUID" user keys to usernames via the Jira Cloud bulk migration API
-// (GET {jiraURL}/rest/api/3/user/bulk/migration?key=ug:{UUID}).  The original
-// "ug:UUID" key is preserved in the caller's log fields for reference.
+// "ug:UUID" user keys to display names via a two-step lookup:
+//  1. GET {jiraURL}/rest/api/3/user/bulk/migration?key=ug:{UUID} → accountId
+//  2. GET {jiraURL}/rest/api/2/user?accountId={accountId}         → displayName
+//
+// Jira Server/DC populates the "username" field directly in step 1, so step 2
+// is skipped in that case.  The original "ug:UUID" key is preserved in the
+// caller's log fields for reference.
 func newJiraBulkMigrationUserResolver(jiraURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	// Inner resolver used as fallback for Jira Cloud accounts where the bulk
+	// migration API returns an accountId but no username.
+	userResolver := newJiraUserResolver(jiraURL, email, token, httpClient, log)
+
 	return &UserResolver{
 		httpClient: httpClient,
 		cache:      make(map[string]string),
@@ -548,7 +572,12 @@ func newJiraBulkMigrationUserResolver(jiraURL, email, token string, httpClient *
 			if len(users) == 0 {
 				return "", nil
 			}
-			return users[0].Username, nil
+			// Jira Server/DC: username is populated, use it directly.
+			if users[0].Username != "" {
+				return users[0].Username, nil
+			}
+			// Jira Cloud: username is empty; resolve displayName from accountId.
+			return userResolver.resolve(users[0].AccountID), nil
 		},
 	}
 }
@@ -564,6 +593,62 @@ func newJiraUserResolver(jiraURL, email, token string, httpClient *http.Client, 
 		log:        log,
 		buildRequest: func(id string) (*http.Request, error) {
 			u := jiraURL + "/rest/api/2/user?accountId=" + url.QueryEscape(id)
+			req, err := http.NewRequest(http.MethodGet, u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(email, token)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var user struct {
+				DisplayName string `json:"displayName"`
+			}
+			if err := json.Unmarshal(data, &user); err != nil {
+				return "", err
+			}
+			return user.DisplayName, nil
+		},
+	}
+}
+
+// newConfluenceGroupResolver creates a UserResolver that maps a Confluence group UUID
+// to a group name via GET {confluenceURL}/rest/api/group/by-id?id={UUID}.
+func newConfluenceGroupResolver(confluenceURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			u := confluenceURL + "/rest/api/group/by-id?id=" + url.QueryEscape(id)
+			req, err := http.NewRequest(http.MethodGet, u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(email, token)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var group struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(data, &group); err != nil {
+				return "", err
+			}
+			return group.Name, nil
+		},
+	}
+}
+
+// newConfluenceUserResolver creates a UserResolver that maps an Atlassian account ID
+// to a display name via GET {confluenceURL}/rest/api/user?accountId={accountId}.
+func newConfluenceUserResolver(confluenceURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			u := confluenceURL + "/rest/api/user?accountId=" + url.QueryEscape(id)
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
 				return nil, err
@@ -1103,14 +1188,40 @@ func fetchJiraAuditRecords(ctx context.Context, jiraClient *jirav2.Client, confi
 	return pages, nil
 }
 
+// resolvedChange is a ChangedValue with optional resolved display names for ug:UUID fields.
+type resolvedChange struct {
+	FieldName       string
+	ChangedFrom     string
+	ChangedFromName string
+	ChangedTo       string
+	ChangedToName   string
+}
+
+// resolvedAssociatedItem is an AssociatedItem with optional resolved display names for ug:UUID fields.
+type resolvedAssociatedItem struct {
+	ID           string
+	IDName       string
+	Name         string
+	NameResolved string
+	TypeName     string
+	ParentID     string
+	ParentName   string
+}
+
 func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
 			objectType := ""
+			objectID := ""
+			objectIDDisplayName := ""
 			if record.ObjectItem != nil {
 				objectName = record.ObjectItem.Name
 				objectType = record.ObjectItem.TypeName
+				objectID = record.ObjectItem.ID
+				if strings.HasPrefix(objectID, "ug:") && migrationResolver != nil {
+					objectIDDisplayName = migrationResolver.resolve(objectID)
+				}
 			}
 
 			var authorDisplayName string
@@ -1122,7 +1233,45 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				}
 			}
 
-			log.Info(
+			// Resolve ug:UUID in changed values, preserving originals.
+			rcs := make([]resolvedChange, 0, len(record.ChangedValues))
+			for _, cv := range record.ChangedValues {
+				rc := resolvedChange{
+					FieldName:   cv.FieldName,
+					ChangedFrom: cv.ChangedFrom,
+					ChangedTo:   cv.ChangedTo,
+				}
+				if strings.HasPrefix(cv.ChangedFrom, "ug:") && migrationResolver != nil {
+					rc.ChangedFromName = migrationResolver.resolve(cv.ChangedFrom)
+				}
+				if strings.HasPrefix(cv.ChangedTo, "ug:") && migrationResolver != nil {
+					rc.ChangedToName = migrationResolver.resolve(cv.ChangedTo)
+				}
+				rcs = append(rcs, rc)
+			}
+
+			// Resolve ug:UUID in associated items, preserving originals.
+			// Both id and name can carry a ug:UUID value.
+			rais := make([]resolvedAssociatedItem, 0, len(record.AssociatedItems))
+			for _, ai := range record.AssociatedItems {
+				rai := resolvedAssociatedItem{
+					ID:         ai.ID,
+					Name:       ai.Name,
+					TypeName:   ai.TypeName,
+					ParentID:   ai.ParentID,
+					ParentName: ai.ParentName,
+				}
+				if strings.HasPrefix(ai.ID, "ug:") && migrationResolver != nil {
+					rai.IDName = migrationResolver.resolve(ai.ID)
+				}
+				if strings.HasPrefix(ai.Name, "ug:") && migrationResolver != nil {
+					rai.NameResolved = migrationResolver.resolve(ai.Name)
+				}
+				rais = append(rais, rai)
+			}
+
+			// Build log args dynamically; skip empty optional fields.
+			logArgs := []interface{}{
 				"Record ID:", record.ID,
 				", Created:", record.Created,
 				", Author:", record.AuthorAccountID,
@@ -1132,27 +1281,104 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 				", Remote Address:", record.RemoteAddress,
 				", Object:", objectName,
 				", Object Type:", objectType,
-			)
+			}
+			if objectID != "" {
+				logArgs = append(logArgs, ", Object ID:", objectID)
+				if objectIDDisplayName != "" {
+					logArgs = append(logArgs, ", Object ID Display Name:", objectIDDisplayName)
+				}
+			}
+			for i, rc := range rcs {
+				logArgs = append(logArgs,
+					fmt.Sprintf(", changedValue[%d] field:", i), rc.FieldName,
+					fmt.Sprintf(", changedValue[%d] from:", i), rc.ChangedFrom,
+				)
+				if rc.ChangedFromName != "" {
+					logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] from name:", i), rc.ChangedFromName)
+				}
+				logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to:", i), rc.ChangedTo)
+				if rc.ChangedToName != "" {
+					logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to name:", i), rc.ChangedToName)
+				}
+			}
+			for i, rai := range rais {
+				name := rai.Name
+				if rai.NameResolved != "" {
+					name = rai.NameResolved
+				}
+				logArgs = append(logArgs,
+					fmt.Sprintf(", associatedItem[%d] id:", i), rai.ID,
+					fmt.Sprintf(", associatedItem[%d] name:", i), name,
+					fmt.Sprintf(", associatedItem[%d] type:", i), rai.TypeName,
+				)
+				if rai.ParentID != "" {
+					logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_id:", i), rai.ParentID)
+				}
+				if rai.ParentName != "" {
+					logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_name:", i), rai.ParentName)
+				}
+			}
+			log.Info(logArgs...)
 
 			ts, err := time.Parse("2006-01-02T15:04:05.999-0700", record.Created)
 			if err != nil {
 				ts = time.Now().UTC()
 			}
+
+			// Build GELF extra fields; expand arrays into indexed fields, skip empty values.
+			extra := map[string]interface{}{
+				"_record_id":           record.ID,
+				"_created":             record.Created,
+				"_author":              record.AuthorAccountID,
+				"_author_display_name": authorDisplayName,
+				"_summary":             record.Summary,
+				"_category":            record.Category,
+				"_remote_address":      record.RemoteAddress,
+				"_object":              objectName,
+				"_object_type":         objectType,
+				"_source":              "jira",
+			}
+			if objectID != "" {
+				extra["_object_id"] = objectID
+				if objectIDDisplayName != "" {
+					extra["_object_id_display_name"] = objectIDDisplayName
+				}
+			}
+			for i, rc := range rcs {
+				p := fmt.Sprintf("_changedValue%d_", i)
+				extra[p+"field"] = rc.FieldName
+				extra[p+"from"] = rc.ChangedFrom
+				if rc.ChangedFromName != "" {
+					extra[p+"from_name"] = rc.ChangedFromName
+				}
+				extra[p+"to"] = rc.ChangedTo
+				if rc.ChangedToName != "" {
+					extra[p+"to_name"] = rc.ChangedToName
+				}
+			}
+			for i, rai := range rais {
+				p := fmt.Sprintf("_associatedItem%d_", i)
+				extra[p+"id"] = rai.ID
+				if rai.IDName != "" {
+					extra[p+"id_name"] = rai.IDName
+				}
+				name := rai.Name
+				if rai.NameResolved != "" {
+					name = rai.NameResolved
+				}
+				extra[p+"name"] = name
+				extra[p+"type"] = rai.TypeName
+				if rai.ParentID != "" {
+					extra[p+"parent_id"] = rai.ParentID
+				}
+				if rai.ParentName != "" {
+					extra[p+"parent_name"] = rai.ParentName
+				}
+			}
 			sendGELF(gelfWriter, gelfHost,
 				fmt.Sprintf("jira audit: %s", record.Summary),
 				ts,
-				map[string]interface{}{
-					"_record_id":           record.ID,
-					"_created":             record.Created,
-					"_author":              record.AuthorAccountID,
-					"_author_display_name": authorDisplayName,
-					"_summary":             record.Summary,
-					"_category":            record.Category,
-					"_remote_address":      record.RemoteAddress,
-					"_object":              objectName,
-					"_object_type":         objectType,
-					"_source":              "jira",
-				},
+				extra,
 				log,
 			)
 		}
@@ -1278,35 +1504,95 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 	return pages, nil
 }
 
-func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string) {
+// parseGroupUserName splits a Confluence affectedObject name of the form
+// "GROUP_UUID; User: ACCOUNT_ID" into its two component parts.
+// Returns empty strings when the name does not match this pattern.
+func parseGroupUserName(name string) (groupID, userAccountID string) {
+	parts := strings.SplitN(name, "; User: ", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, groupResolver *UserResolver, userResolver *UserResolver) {
 	for _, page := range pages {
 		for _, record := range page.Results {
 			createdMs := time.UnixMilli(record.CreationDate).UTC()
-			log.Info(
+
+			// Resolve affectedObject.name when it encodes "GROUP_UUID; User: ACCOUNT_ID".
+			groupID, userAccountID := parseGroupUserName(record.AffectedObject.Name)
+			var affectedGroupName, affectedUserName string
+			if groupID != "" && groupResolver != nil {
+				affectedGroupName = groupResolver.resolve(groupID)
+			}
+			if userAccountID != "" && userResolver != nil {
+				affectedUserName = userResolver.resolve(userAccountID)
+			}
+
+			logArgs := []interface{}{
 				"Created:", createdMs.Format(time.RFC3339),
 				", Author:", record.Author.DisplayName,
 				", Author Account:", record.Author.AccountID,
 				", Summary:", record.Summary,
 				", Category:", record.Category,
 				", Remote Address:", record.RemoteAddress,
-				", Object:", record.AffectedObject.Name,
-				", Object Type:", record.AffectedObject.ObjectType,
-			)
+				", affectedObject name:", record.AffectedObject.Name,
+				", affectedObject type:", record.AffectedObject.ObjectType,
+			}
+			if affectedGroupName != "" {
+				logArgs = append(logArgs, ", affectedObject group name:", affectedGroupName)
+			}
+			if affectedUserName != "" {
+				logArgs = append(logArgs, ", affectedObject user name:", affectedUserName)
+			}
+			for i, cv := range record.ChangedValues {
+				logArgs = append(logArgs,
+					fmt.Sprintf(", changedValue[%d] name:", i), cv.Name,
+					fmt.Sprintf(", changedValue[%d] from:", i), cv.OldValue,
+					fmt.Sprintf(", changedValue[%d] to:", i), cv.NewValue,
+				)
+			}
+			for i, ao := range record.AssociatedObjects {
+				logArgs = append(logArgs,
+					fmt.Sprintf(", associatedObject[%d] name:", i), ao.Name,
+					fmt.Sprintf(", associatedObject[%d] type:", i), ao.ObjectType,
+				)
+			}
+			log.Info(logArgs...)
 
+			extra := map[string]interface{}{
+				"_created":             createdMs.Format(time.RFC3339),
+				"_author":              record.Author.DisplayName,
+				"_author_account":      record.Author.AccountID,
+				"_summary":             record.Summary,
+				"_category":            record.Category,
+				"_remote_address":      record.RemoteAddress,
+				"_affectedObject_name": record.AffectedObject.Name,
+				"_affectedObject_type": record.AffectedObject.ObjectType,
+				"_source":              "confluence",
+			}
+			if affectedGroupName != "" {
+				extra["_affectedObject_group_name"] = affectedGroupName
+			}
+			if affectedUserName != "" {
+				extra["_affectedObject_user_name"] = affectedUserName
+			}
+			for i, cv := range record.ChangedValues {
+				p := fmt.Sprintf("_changedValue%d_", i)
+				extra[p+"name"] = cv.Name
+				extra[p+"from"] = cv.OldValue
+				extra[p+"to"] = cv.NewValue
+			}
+			for i, ao := range record.AssociatedObjects {
+				p := fmt.Sprintf("_associatedObject%d_", i)
+				extra[p+"name"] = ao.Name
+				extra[p+"type"] = ao.ObjectType
+			}
 			sendGELF(gelfWriter, gelfHost,
 				fmt.Sprintf("confluence audit: %s", record.Summary),
 				createdMs,
-				map[string]interface{}{
-					"_created":        createdMs.Format(time.RFC3339),
-					"_author":         record.Author.DisplayName,
-					"_author_account": record.Author.AccountID,
-					"_summary":        record.Summary,
-					"_category":       record.Category,
-					"_remote_address": record.RemoteAddress,
-					"_object":         record.AffectedObject.Name,
-					"_object_type":    record.AffectedObject.ObjectType,
-					"_source":         "confluence",
-				},
+				extra,
 				log,
 			)
 		}
@@ -1351,7 +1637,9 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	// Records are returned newest-first; pick the first record of the first page as checkpoint.
 	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
 
-	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost)
+	groupResolver := newConfluenceGroupResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	userResolver := newConfluenceUserResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost, groupResolver, userResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
