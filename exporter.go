@@ -516,6 +516,43 @@ func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredL
 	}
 }
 
+// newJiraBulkMigrationUserResolver creates a UserResolver that resolves
+// "ug:UUID" user keys to usernames via the Jira Cloud bulk migration API
+// (GET {jiraURL}/rest/api/3/user/bulk/migration?key=ug:{UUID}).  The original
+// "ug:UUID" key is preserved in the caller's log fields for reference.
+func newJiraBulkMigrationUserResolver(jiraURL, email, token string, httpClient *http.Client, log *zap.SugaredLogger) *UserResolver {
+	return &UserResolver{
+		httpClient: httpClient,
+		cache:      make(map[string]string),
+		log:        log,
+		buildRequest: func(id string) (*http.Request, error) {
+			// resolve() strips the "ug:" prefix; add it back because the bulk
+			// migration endpoint expects the full key in "ug:UUID" form.
+			u := jiraURL + "/rest/api/3/user/bulk/migration?key=ug:" + url.QueryEscape(id)
+			req, err := http.NewRequest(http.MethodGet, u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(email, token)
+			return req, nil
+		},
+		extractName: func(data []byte) (string, error) {
+			var users []struct {
+				Key       string `json:"key"`
+				AccountID string `json:"accountId"`
+				Username  string `json:"username"`
+			}
+			if err := json.Unmarshal(data, &users); err != nil {
+				return "", err
+			}
+			if len(users) == 0 {
+				return "", nil
+			}
+			return users[0].Username, nil
+		},
+	}
+}
+
 // newJiraUserResolver creates a UserResolver that resolves account IDs via the
 // Jira Cloud REST API (GET {jiraURL}/rest/api/2/user?accountId=...) using Basic
 // Auth.  This does not require an Atlassian Guard subscription — the same
@@ -1066,7 +1103,7 @@ func fetchJiraAuditRecords(ctx context.Context, jiraClient *jirav2.Client, confi
 	return pages, nil
 }
 
-func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver) {
+func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver) {
 	for _, page := range pages {
 		for _, record := range page.Records {
 			objectName := ""
@@ -1077,8 +1114,12 @@ func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.Sug
 			}
 
 			var authorDisplayName string
-			if resolver != nil && record.AuthorAccountID != "" {
-				authorDisplayName = resolver.resolve(record.AuthorAccountID)
+			if record.AuthorAccountID != "" {
+				if strings.HasPrefix(record.AuthorAccountID, "ug:") && migrationResolver != nil {
+					authorDisplayName = migrationResolver.resolve(record.AuthorAccountID)
+				} else if resolver != nil {
+					authorDisplayName = resolver.resolve(record.AuthorAccountID)
+				}
 			}
 
 			log.Info(
@@ -1159,8 +1200,9 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		log.Errorf("Error parsing last record date %q: %v", pages[0].Records[0].Created, err)
 	}
 
+	jiraMigrationResolver := newJiraBulkMigrationUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
 	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver)
+	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver, jiraMigrationResolver)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
