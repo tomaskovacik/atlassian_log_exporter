@@ -26,6 +26,10 @@ services:
   jira-log-exporter:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
     container_name: jira-log-exporter
+    # The exporter fetches audit logs and exits (exit 0 = success).
+    # on-failure restarts only on non-zero exit, so a successful run stops the
+    # container as intended.  Use 'unless-stopped' if you want the container to
+    # keep re-running after each successful export cycle.
     restart: on-failure
     command: ["-source=jira"]
     environment:
@@ -42,6 +46,7 @@ services:
   confluence-log-exporter:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
     container_name: confluence-log-exporter
+    # See comment on jira-log-exporter for the restart policy rationale.
     restart: on-failure
     command: ["-source=confluence"]
     environment:
