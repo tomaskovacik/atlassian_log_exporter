@@ -1,0 +1,60 @@
+# docker-compose.yml — Atlassian Log Exporter
+#
+# Contains one service per supported Atlassian source.
+# Each service runs the exporter for its respective source and persists state
+# in a named volume so subsequent runs resume from where they left off.
+#
+# Required environment variables (set in a .env file or export them):
+#
+#   Jira:
+#     JIRA_URL              e.g. https://your-org.atlassian.net
+#     ATLASSIAN_EMAIL       Atlassian account email
+#     ATLASSIAN_TOKEN       Atlassian personal API token
+#
+#   Confluence:
+#     CONFLUENCE_URL        e.g. https://your-org.atlassian.net/wiki
+#     ATLASSIAN_EMAIL       Atlassian account email
+#     ATLASSIAN_TOKEN       Atlassian personal API token
+#
+# Optional variables (shared across services):
+#   GELF_HOST              Graylog GELF server hostname or IP
+#   FLUENTBIT_HOST         Fluent Bit HTTP input hostname
+#   FLUENTBIT_TAG          Fluent Bit tag / URL path segment (defaults to source name)
+
+services:
+
+  jira-log-exporter:
+    image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
+    container_name: jira-log-exporter
+    restart: on-failure
+    command: ["-source=jira"]
+    environment:
+      JIRA_URL: ${JIRA_URL}
+      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
+      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
+      GELF_HOST: ${GELF_HOST:-}
+      FLUENTBIT_HOST: ${FLUENTBIT_HOST:-}
+      FLUENTBIT_TAG: ${FLUENTBIT_TAG:-jira}
+    volumes:
+      - jira-state:/state
+    working_dir: /state
+
+  confluence-log-exporter:
+    image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
+    container_name: confluence-log-exporter
+    restart: on-failure
+    command: ["-source=confluence"]
+    environment:
+      CONFLUENCE_URL: ${CONFLUENCE_URL}
+      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
+      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
+      GELF_HOST: ${GELF_HOST:-}
+      FLUENTBIT_HOST: ${FLUENTBIT_HOST:-}
+      FLUENTBIT_TAG: ${FLUENTBIT_TAG:-confluence}
+    volumes:
+      - confluence-state:/state
+    working_dir: /state
+
+volumes:
+  jira-state:
+  confluence-state:
