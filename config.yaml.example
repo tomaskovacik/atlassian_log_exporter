@@ -85,3 +85,20 @@ log_file: log.txt
 
 # Transport protocol: udp (default) or tcp.
 # gelf_protocol: udp
+
+# ---------------------------------------------------------------------------
+# Fluent Bit HTTP output (optional)
+# ---------------------------------------------------------------------------
+
+# Enable sending events to a Fluent Bit HTTP input plugin.
+# fluentbit_enabled: false
+
+# Hostname or IP address of the Fluent Bit instance.
+# fluentbit_host: "fluentbit.example.com"    # FLUENTBIT_HOST env var
+
+# Port on which Fluent Bit listens for HTTP input (default: 9880).
+# fluentbit_port: 9880
+
+# Tag / URL path appended to the Fluent Bit endpoint (env: FLUENTBIT_TAG).
+# Defaults to the source name (admin, bitbucket, jira, or confluence).
+# fluentbit_tag: ""

@@ -256,13 +256,13 @@ func TestProcessBitbucketEvents_NoPanic(t *testing.T) {
 			},
 		},
 	}
-	processBitbucketEvents(pages, nopLogger(), nil, "")
+	processBitbucketEvents(pages, nopLogger(), nil, "", nil)
 }
 
 func TestProcessBitbucketEvents_EmptyPages(t *testing.T) {
-	processBitbucketEvents(nil, nopLogger(), nil, "")
-	processBitbucketEvents([]BitbucketAuditPage{}, nopLogger(), nil, "")
-	processBitbucketEvents([]BitbucketAuditPage{{Values: nil}}, nopLogger(), nil, "")
+	processBitbucketEvents(nil, nopLogger(), nil, "", nil)
+	processBitbucketEvents([]BitbucketAuditPage{}, nopLogger(), nil, "", nil)
+	processBitbucketEvents([]BitbucketAuditPage{{Values: nil}}, nopLogger(), nil, "", nil)
 }
 
 // ---------- processEvents (admin) ----------
@@ -287,7 +287,7 @@ func TestProcessEvents_NilLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "", nil)
+	processEvents(chunks, nopLogger(), nil, "", nil, nil)
 }
 
 func TestProcessEvents_WithLocation(t *testing.T) {
@@ -312,12 +312,12 @@ func TestProcessEvents_WithLocation(t *testing.T) {
 			},
 		},
 	}
-	processEvents(chunks, nopLogger(), nil, "", nil)
+	processEvents(chunks, nopLogger(), nil, "", nil, nil)
 }
 
 func TestProcessEvents_Empty(t *testing.T) {
-	processEvents(nil, nopLogger(), nil, "", nil)
-	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "", nil)
+	processEvents(nil, nopLogger(), nil, "", nil, nil)
+	processEvents([]*models.OrganizationEventPageScheme{}, nopLogger(), nil, "", nil, nil)
 }
 
 // ---------- processJiraAuditRecords ----------
@@ -338,7 +338,7 @@ func TestProcessJiraAuditRecords_NilObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
@@ -359,12 +359,12 @@ func TestProcessJiraAuditRecords_WithObjectItem(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessJiraAuditRecords_Empty(t *testing.T) {
-	processJiraAuditRecords(nil, nopLogger(), nil, "", nil, nil)
-	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil, nil)
+	processJiraAuditRecords(nil, nopLogger(), nil, "", nil, nil, nil)
+	processJiraAuditRecords([]*models.AuditRecordPageScheme{}, nopLogger(), nil, "", nil, nil, nil)
 }
 
 // TestProcessJiraAuditRecords_AuthorAccountIDResolved checks that when AuthorAccountID
@@ -393,7 +393,7 @@ func TestProcessJiraAuditRecords_AuthorAccountIDResolved(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil, nil)
 }
 
 // TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver checks that an
@@ -421,7 +421,7 @@ func TestProcessJiraAuditRecords_EmptyAuthorAccountIDSkipsResolver(t *testing.T)
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", resolver, nil, nil)
 
 	if called {
 		t.Error("resolver should not be called when AuthorAccountID is empty")
@@ -444,7 +444,7 @@ func TestProcessJiraAuditRecords_NilResolverAuthorAccountID(t *testing.T) {
 			},
 		},
 	}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 // TestProcessJiraAuditRecords_UgUUIDAuthorUsesMigrationResolver verifies that a
@@ -476,7 +476,7 @@ func TestProcessJiraAuditRecords_UgUUIDAuthorUsesMigrationResolver(t *testing.T)
 			Category:        "user management",
 		}},
 	}}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", regularResolver, migrationResolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", regularResolver, migrationResolver, nil)
 
 	if migrationCalls == 0 {
 		t.Error("migration resolver should have been called for ug:UUID author")
@@ -508,7 +508,7 @@ func TestProcessJiraAuditRecords_UgUUIDInChangedValues(t *testing.T) {
 			},
 		}},
 	}}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver, nil)
 
 	// Two distinct IDs → two API calls (cache misses).
 	if calls == 0 {
@@ -540,7 +540,7 @@ func TestProcessJiraAuditRecords_UgUUIDInObjectItemID(t *testing.T) {
 			},
 		}},
 	}}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver, nil)
 
 	if calls == 0 {
 		t.Error("migration resolver should have been called for ug:UUID in ObjectItem.ID")
@@ -569,7 +569,7 @@ func TestProcessJiraAuditRecords_UgUUIDInAssociatedItems(t *testing.T) {
 			},
 		}},
 	}}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver, nil)
 
 	if calls == 0 {
 		t.Error("migration resolver should have been called for ug:UUID in AssociatedItems ID")
@@ -600,7 +600,7 @@ func TestProcessJiraAuditRecords_UgUUIDInAssocItemsName(t *testing.T) {
 			},
 		}},
 	}}
-	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver)
+	processJiraAuditRecords(pages, nopLogger(), nil, "", nil, migrationResolver, nil)
 
 	if calls == 0 {
 		t.Error("migration resolver should have been called for ug:UUID in AssociatedItems Name")
@@ -630,13 +630,13 @@ func TestProcessConfluenceAuditRecords_NoPanic(t *testing.T) {
 			},
 		},
 	}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessConfluenceAuditRecords_Empty(t *testing.T) {
-	processConfluenceAuditRecords(nil, nopLogger(), nil, "", nil, nil)
-	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger(), nil, "", nil, nil)
-	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords(nil, nopLogger(), nil, "", nil, nil, nil)
+	processConfluenceAuditRecords([]ConfluenceAuditPage{}, nopLogger(), nil, "", nil, nil, nil)
+	processConfluenceAuditRecords([]ConfluenceAuditPage{{Results: nil}}, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessConfluenceAuditRecords_WithChangedValues(t *testing.T) {
@@ -653,7 +653,7 @@ func TestProcessConfluenceAuditRecords_WithChangedValues(t *testing.T) {
 		}},
 	}}
 	// Must not panic and must process both changed values.
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessConfluenceAuditRecords_WithAssociatedObjects(t *testing.T) {
@@ -669,7 +669,7 @@ func TestProcessConfluenceAuditRecords_WithAssociatedObjects(t *testing.T) {
 			},
 		}},
 	}}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 func TestProcessConfluenceAuditRecords_ChangedValuesAndAssociatedObjects(t *testing.T) {
@@ -688,7 +688,7 @@ func TestProcessConfluenceAuditRecords_ChangedValuesAndAssociatedObjects(t *test
 			},
 		}},
 	}}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", nil, nil, nil)
 }
 
 // ---------- parseGroupUserName ----------
@@ -812,7 +812,7 @@ func TestProcessConfluenceAuditRecords_GroupUserResolution(t *testing.T) {
 			},
 		}},
 	}}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver, nil)
 
 	if groupCalls == 0 {
 		t.Error("group resolver should have been called")
@@ -841,7 +841,7 @@ func TestProcessConfluenceAuditRecords_PlainAffectedObjectSkipsResolvers(t *test
 			AffectedObject: ConfluenceAuditObject{Name: "Engineering", ObjectType: "Space"},
 		}},
 	}}
-	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver)
+	processConfluenceAuditRecords(pages, nopLogger(), nil, "", groupResolver, userResolver, nil)
 
 	if called {
 		t.Error("resolvers should not be called when affectedObject.name has no '; User: ' pattern")
@@ -894,6 +894,10 @@ gelf_enabled: true
 gelf_host: graylog.example.com
 gelf_port: 12201
 gelf_protocol: tcp
+fluentbit_enabled: true
+fluentbit_host: fluentbit.example.com
+fluentbit_port: 9880
+fluentbit_tag: atlassian
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -925,6 +929,8 @@ gelf_protocol: tcp
 		{"AtlassianToken", cfg.AtlassianToken, "atlassian-secret"},
 		{"GELFHost", cfg.GELFHost, "graylog.example.com"},
 		{"GELFProtocol", cfg.GELFProtocol, "tcp"},
+		{"FluentBitHost", cfg.FluentBitHost, "fluentbit.example.com"},
+		{"FluentBitTag", cfg.FluentBitTag, "atlassian"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -945,6 +951,12 @@ gelf_protocol: tcp
 	}
 	if cfg.GELFPort != 12201 {
 		t.Errorf("GELFPort: got %d, want 12201", cfg.GELFPort)
+	}
+	if cfg.FluentBitEnabled == nil || !*cfg.FluentBitEnabled {
+		t.Error("FluentBitEnabled: got nil or false, want true")
+	}
+	if cfg.FluentBitPort != 9880 {
+		t.Errorf("FluentBitPort: got %d, want 9880", cfg.FluentBitPort)
 	}
 }
 
@@ -1183,7 +1195,7 @@ func TestProcessEvents_WithResolver(t *testing.T) {
 		},
 	}
 	// Must not panic; resolver is exercised.
-	processEvents(chunks, nopLogger(), nil, "", resolver)
+	processEvents(chunks, nopLogger(), nil, "", resolver, nil)
 }
 
 // ---------- JiraUserResolver ----------
@@ -1307,4 +1319,124 @@ func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	clone.URL.Host = base.Host
 	return t.wrapped.RoundTrip(clone)
 }
+
+// ---------- FluentBitClient ----------
+
+// TestInitFluentBit_Disabled verifies that initFluentBit returns nil when disabled.
+func TestInitFluentBit_Disabled(t *testing.T) {
+	cfg := Config{FluentBitEnabled: false}
+	client := initFluentBit(cfg, nopLogger())
+	if client != nil {
+		t.Error("expected nil FluentBitClient when disabled")
+	}
+}
+
+// TestInitFluentBit_DefaultTag checks that the source name is used as the tag
+// when FluentBitTag is not set.
+func TestInitFluentBit_DefaultTag(t *testing.T) {
+	cfg := Config{
+		FluentBitEnabled: true,
+		FluentBitHost:    "localhost",
+		FluentBitPort:    9880,
+		Source:           "jira",
+	}
+	client := initFluentBit(cfg, nopLogger())
+	if client == nil {
+		t.Fatal("expected non-nil FluentBitClient")
+	}
+	if !strings.HasSuffix(client.url, "/jira") {
+		t.Errorf("expected URL to end with /jira, got %q", client.url)
+	}
+}
+
+// TestInitFluentBit_CustomTag checks that an explicit FluentBitTag is used.
+func TestInitFluentBit_CustomTag(t *testing.T) {
+	cfg := Config{
+		FluentBitEnabled: true,
+		FluentBitHost:    "localhost",
+		FluentBitPort:    9880,
+		Source:           "admin",
+		FluentBitTag:     "my-tag",
+	}
+	client := initFluentBit(cfg, nopLogger())
+	if client == nil {
+		t.Fatal("expected non-nil FluentBitClient")
+	}
+	if !strings.HasSuffix(client.url, "/my-tag") {
+		t.Errorf("expected URL to end with /my-tag, got %q", client.url)
+	}
+}
+
+// TestSendFluentBit_NilClient verifies that a nil client is a no-op.
+func TestSendFluentBit_NilClient(t *testing.T) {
+	// Should not panic.
+	sendFluentBit(nil, map[string]interface{}{"_key": "value"}, nopLogger())
+}
+
+// TestSendFluentBit_PostsJSON verifies that the client POSTs well-formed JSON
+// with underscore-stripped field names.
+func TestSendFluentBit_PostsJSON(t *testing.T) {
+	var receivedBody []byte
+	var receivedContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedContentType = r.Header.Get("Content-Type")
+		var err error
+		receivedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &FluentBitClient{
+		httpClient: server.Client(),
+		url:        server.URL + "/test-tag",
+		log:        nopLogger(),
+	}
+
+	sendFluentBit(client, map[string]interface{}{
+		"_source": "admin",
+		"_action": "user_login",
+	}, nopLogger())
+
+	if receivedContentType != "application/json" {
+		t.Errorf("Content-Type: got %q, want application/json", receivedContentType)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(receivedBody, &payload); err != nil {
+		t.Fatalf("body is not valid JSON: %v", err)
+	}
+
+	if v, ok := payload["source"]; !ok || v != "admin" {
+		t.Errorf("expected payload[\"source\"] = \"admin\", got %v", payload["source"])
+	}
+	if v, ok := payload["action"]; !ok || v != "user_login" {
+		t.Errorf("expected payload[\"action\"] = \"user_login\", got %v", payload["action"])
+	}
+	// Underscore-prefixed keys must not appear.
+	if _, ok := payload["_source"]; ok {
+		t.Error("field \"_source\" must be stripped to \"source\"")
+	}
+}
+
+// TestSendFluentBit_UnexpectedStatus verifies a warning is logged on non-2xx.
+func TestSendFluentBit_UnexpectedStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := &FluentBitClient{
+		httpClient: server.Client(),
+		url:        server.URL + "/tag",
+		log:        nopLogger(),
+	}
+
+	// Must not panic.
+	sendFluentBit(client, map[string]interface{}{"_key": "val"}, nopLogger())
+}
+
 
