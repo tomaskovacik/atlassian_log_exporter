@@ -58,12 +58,16 @@ docker run --rm \
 Use Docker Compose for one-shot Jira or Confluence runs with persistent state volumes:
 
 ```sh
+cp config.yaml config.yml
 cp .env.example .env
-# edit .env with your credentials
+# put your main settings in config.yml
+# use .env only for optional overrides / secrets you do not want in config.yml
 
 docker compose run --rm jira-log-exporter
 docker compose run --rm confluence-log-exporter
 ```
+
+The Compose file mounts `./config.yml` and starts the exporter with `-config /config.yml` by default. If you want to use a different host-side file, set `CONFIG_FILE=/path/to/config.yaml` when invoking `docker compose`. Environment variables from `.env` are still passed through, so they can fill in missing values from the config file or override secrets.
 
 The Compose file is intended for ad-hoc or externally scheduled job runs, not `docker compose up`. For recurring exports, schedule `docker compose run --rm ...` from host cron, a systemd timer, or another external scheduler.
 
