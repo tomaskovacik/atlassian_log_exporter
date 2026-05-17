@@ -55,6 +55,18 @@ docker run --rm \
   ghcr.io/tomaskovacik/atlassian_log_exporter:latest -config /config.yaml
 ```
 
+Use Docker Compose for one-shot Jira or Confluence runs with persistent state volumes:
+
+```sh
+cp .env.example .env
+# edit .env with your credentials
+
+docker compose run --rm jira-log-exporter
+docker compose run --rm confluence-log-exporter
+```
+
+The Compose file is intended for ad-hoc or externally scheduled job runs, not `docker compose up`. For recurring exports, schedule `docker compose run --rm ...` from host cron, a systemd timer, or another external scheduler.
+
 To build the image locally:
 
 ```sh
@@ -399,4 +411,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 Apache License Version 2.0, January 2004
-
