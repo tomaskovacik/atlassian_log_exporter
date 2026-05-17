@@ -5,15 +5,15 @@
 # they left off.
 #
 # Run manually:
-#   cp config.yaml config.yml   # or point CONFIG_FILE at another path
+#   cp config.yaml.example config.yaml   # or point CONFIG_FILE at another path
 #   docker compose run --rm jira-log-exporter
 #   docker compose run --rm confluence-log-exporter
 #
 # For recurring runs, schedule the command externally (host cron, systemd timer,
 # Kubernetes CronJob, etc.) instead of running a cron daemon in the container.
 #
-# By default Compose mounts ./config.yml and starts the exporter with
-#   -config /config.yml
+# By default Compose mounts ./config.yaml and starts the exporter with
+#   -config /config.yaml
 # Override the host-side config path by setting CONFIG_FILE.
 #
 # Optional environment variables (set in a .env file or export them) are still
@@ -33,25 +33,25 @@ services:
 
   jira-log-exporter:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
-    command: ["-config", "/config.yml", "-source=jira"]
+    command: ["-config", "/config.yaml", "-source=jira"]
     environment:
       JIRA_URL: ${JIRA_URL}
       ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
       ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
     volumes:
-      - ${CONFIG_FILE:-./config.yml}:/config.yml:ro
+      - ${CONFIG_FILE:-./config.yaml}:/config.yaml:ro
       - jira-state:/state
     working_dir: /state
 
   confluence-log-exporter:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
-    command: ["-config", "/config.yml", "-source=confluence"]
+    command: ["-config", "/config.yaml", "-source=confluence"]
     environment:
       CONFLUENCE_URL: ${CONFLUENCE_URL}
       ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
       ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
     volumes:
-      - ${CONFIG_FILE:-./config.yml}:/config.yml:ro
+      - ${CONFIG_FILE:-./config.yaml}:/config.yaml:ro
       - confluence-state:/state
     working_dir: /state
 
