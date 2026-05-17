@@ -233,6 +233,65 @@ func TestResponseBodyCapturingTransport_TransportError(t *testing.T) {
 	}
 }
 
+func TestResolveConfluenceAuditNext_GatewayRootRelative(t *testing.T) {
+	baseURL := "https://api.atlassian.com/ex/confluence/cloud-id/wiki/"
+	next := "/rest/api/audit?next=true&limit=1000&start=1000&startDate=2026-01-01"
+
+	got, err := resolveConfluenceAuditNext(baseURL, next)
+	if err != nil {
+		t.Fatalf("resolveConfluenceAuditNext: %v", err)
+	}
+
+	want := "https://api.atlassian.com/ex/confluence/cloud-id/wiki/rest/api/audit?next=true&limit=1000&start=1000&startDate=2026-01-01"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveConfluenceAuditNext_PreservesWikiPrefixedPath(t *testing.T) {
+	baseURL := "https://your-org.atlassian.net/wiki/"
+	next := "/wiki/rest/api/audit?next=true&limit=1000"
+
+	got, err := resolveConfluenceAuditNext(baseURL, next)
+	if err != nil {
+		t.Fatalf("resolveConfluenceAuditNext: %v", err)
+	}
+
+	want := "https://your-org.atlassian.net/wiki/rest/api/audit?next=true&limit=1000"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveConfluenceAuditNext_HandlesBaseWithoutTrailingSlash(t *testing.T) {
+	baseURL := "https://api.atlassian.com/ex/confluence/cloud-id/wiki"
+	next := "/rest/api/audit?next=true"
+
+	got, err := resolveConfluenceAuditNext(baseURL, next)
+	if err != nil {
+		t.Fatalf("resolveConfluenceAuditNext: %v", err)
+	}
+
+	want := "https://api.atlassian.com/ex/confluence/cloud-id/wiki/rest/api/audit?next=true"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveConfluenceAuditNext_LeavesRelativeLinkUntouched(t *testing.T) {
+	baseURL := "https://api.atlassian.com/ex/confluence/cloud-id/wiki/"
+	next := "rest/api/audit?next=true"
+
+	got, err := resolveConfluenceAuditNext(baseURL, next)
+	if err != nil {
+		t.Fatalf("resolveConfluenceAuditNext: %v", err)
+	}
+
+	if got != next {
+		t.Fatalf("got %q, want %q", got, next)
+	}
+}
+
 // ---------- processBitbucketEvents ----------
 
 func TestProcessBitbucketEvents_NoPanic(t *testing.T) {
@@ -675,10 +734,10 @@ func TestProcessConfluenceAuditRecords_WithAssociatedObjects(t *testing.T) {
 func TestProcessConfluenceAuditRecords_ChangedValuesAndAssociatedObjects(t *testing.T) {
 	pages := []ConfluenceAuditPage{{
 		Results: []ConfluenceAuditRecord{{
-			Author:       ConfluenceAuditAuthor{DisplayName: "Carol", AccountID: "acc-carol"},
-			CreationDate: 1717228800000,
-			Summary:      "User added to space",
-			Category:     "permissions",
+			Author:         ConfluenceAuditAuthor{DisplayName: "Carol", AccountID: "acc-carol"},
+			CreationDate:   1717228800000,
+			Summary:        "User added to space",
+			Category:       "permissions",
 			AffectedObject: ConfluenceAuditObject{Name: "Engineering", ObjectType: "Space"},
 			ChangedValues: []ConfluenceChangedValue{
 				{Name: "Role", OldValue: "", NewValue: "contributor"},
@@ -887,7 +946,11 @@ workspace: my-workspace
 bb_username: bbuser
 bb_app_password: bbpassword
 jira_url: https://jira.example.com
+jira_email: jira-user@example.com
+jira_token: jira-secret
 confluence_url: https://confluence.example.com
+confluence_email: confluence-user@example.com
+confluence_token: confluence-secret
 atlassian_email: user@example.com
 atlassian_token: atlassian-secret
 gelf_enabled: true
@@ -924,7 +987,11 @@ fluentbit_tag: atlassian
 		{"BBUsername", cfg.BBUsername, "bbuser"},
 		{"BBAppPassword", cfg.BBAppPassword, "bbpassword"},
 		{"JiraURL", cfg.JiraURL, "https://jira.example.com"},
+		{"JiraEmail", cfg.JiraEmail, "jira-user@example.com"},
+		{"JiraToken", cfg.JiraToken, "jira-secret"},
 		{"ConfluenceURL", cfg.ConfluenceURL, "https://confluence.example.com"},
+		{"ConfluenceEmail", cfg.ConfluenceEmail, "confluence-user@example.com"},
+		{"ConfluenceToken", cfg.ConfluenceToken, "confluence-secret"},
 		{"AtlassianEmail", cfg.AtlassianEmail, "user@example.com"},
 		{"AtlassianToken", cfg.AtlassianToken, "atlassian-secret"},
 		{"GELFHost", cfg.GELFHost, "graylog.example.com"},
@@ -1049,6 +1116,96 @@ func TestMergeYAMLConfig_NilBoolNotOverridingBase(t *testing.T) {
 
 	if merged.Debug == nil || !*merged.Debug {
 		t.Error("mergeYAMLConfig: nil bool in override should leave base value intact")
+	}
+}
+
+func TestYAMLConfig_WithLegacyCredentialFallbacks(t *testing.T) {
+	cfg := YAMLConfig{
+		AtlassianEmail: "shared@example.com",
+		AtlassianToken: "shared-token",
+	}
+
+	cfg = cfg.withLegacyCredentialFallbacks()
+
+	if cfg.JiraEmail != "shared@example.com" || cfg.ConfluenceEmail != "shared@example.com" {
+		t.Fatalf("shared email should fill source-specific emails, got jira=%q confluence=%q", cfg.JiraEmail, cfg.ConfluenceEmail)
+	}
+	if cfg.JiraToken != "shared-token" || cfg.ConfluenceToken != "shared-token" {
+		t.Fatalf("shared token should fill source-specific tokens, got jira=%q confluence=%q", cfg.JiraToken, cfg.ConfluenceToken)
+	}
+}
+
+func TestYAMLConfig_WithLegacyCredentialFallbacks_PreservesSourceSpecificValues(t *testing.T) {
+	cfg := YAMLConfig{
+		JiraEmail:       "jira@example.com",
+		JiraToken:       "jira-token",
+		ConfluenceEmail: "confluence@example.com",
+		ConfluenceToken: "confluence-token",
+		AtlassianEmail:  "shared@example.com",
+		AtlassianToken:  "shared-token",
+	}
+
+	cfg = cfg.withLegacyCredentialFallbacks()
+
+	if cfg.JiraEmail != "jira@example.com" || cfg.JiraToken != "jira-token" {
+		t.Fatalf("jira-specific credentials should win, got email=%q token=%q", cfg.JiraEmail, cfg.JiraToken)
+	}
+	if cfg.ConfluenceEmail != "confluence@example.com" || cfg.ConfluenceToken != "confluence-token" {
+		t.Fatalf("confluence-specific credentials should win, got email=%q token=%q", cfg.ConfluenceEmail, cfg.ConfluenceToken)
+	}
+}
+
+func TestConfig_ApplySharedCredentialFlagFallbacks(t *testing.T) {
+	cfg := Config{
+		AtlassianEmail:  "shared@example.com",
+		AtlassianToken:  "shared-token",
+		JiraEmail:       "old-jira@example.com",
+		JiraToken:       "old-jira-token",
+		ConfluenceEmail: "old-confluence@example.com",
+		ConfluenceToken: "old-confluence-token",
+	}
+
+	cfg.applySharedCredentialFlagFallbacks(map[string]bool{
+		"atlassian-email": true,
+		"atlassian-token": true,
+	})
+
+	if cfg.JiraEmail != "shared@example.com" || cfg.ConfluenceEmail != "shared@example.com" {
+		t.Fatalf("shared email flag should update both source-specific emails, got jira=%q confluence=%q", cfg.JiraEmail, cfg.ConfluenceEmail)
+	}
+	if cfg.JiraToken != "shared-token" || cfg.ConfluenceToken != "shared-token" {
+		t.Fatalf("shared token flag should update both source-specific tokens, got jira=%q confluence=%q", cfg.JiraToken, cfg.ConfluenceToken)
+	}
+}
+
+func TestConfig_ApplySharedCredentialFlagFallbacks_RespectsExplicitSourceFlags(t *testing.T) {
+	cfg := Config{
+		AtlassianEmail:  "shared@example.com",
+		AtlassianToken:  "shared-token",
+		JiraEmail:       "jira@example.com",
+		JiraToken:       "jira-token",
+		ConfluenceEmail: "confluence@example.com",
+		ConfluenceToken: "confluence-token",
+	}
+
+	cfg.applySharedCredentialFlagFallbacks(map[string]bool{
+		"atlassian-email":  true,
+		"atlassian-token":  true,
+		"jira-email":       true,
+		"confluence-token": true,
+	})
+
+	if cfg.JiraEmail != "jira@example.com" {
+		t.Fatalf("explicit jira-email flag should be preserved, got %q", cfg.JiraEmail)
+	}
+	if cfg.JiraToken != "shared-token" {
+		t.Fatalf("jira token should still inherit shared token, got %q", cfg.JiraToken)
+	}
+	if cfg.ConfluenceEmail != "shared@example.com" {
+		t.Fatalf("confluence email should inherit shared email, got %q", cfg.ConfluenceEmail)
+	}
+	if cfg.ConfluenceToken != "confluence-token" {
+		t.Fatalf("explicit confluence-token flag should be preserved, got %q", cfg.ConfluenceToken)
 	}
 }
 
@@ -1242,7 +1399,6 @@ func TestJiraUserResolver_CleanAccountID(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "Bob Jira")
 	}
 }
-
 
 // ---------- JiraBulkMigrationUserResolver ----------
 
@@ -1438,5 +1594,3 @@ func TestSendFluentBit_UnexpectedStatus(t *testing.T) {
 	// Must not panic.
 	sendFluentBit(client, map[string]interface{}{"_key": "val"}, nopLogger())
 }
-
-

@@ -21,11 +21,15 @@
 #
 #   Jira:
 #     JIRA_URL              e.g. https://your-org.atlassian.net
+#     JIRA_EMAIL            Jira account email (preferred when using source-specific creds)
+#     JIRA_TOKEN            Jira personal API token (preferred when using source-specific creds)
 #     ATLASSIAN_EMAIL       Atlassian account email
 #     ATLASSIAN_TOKEN       Atlassian personal API token
 #
 #   Confluence:
 #     CONFLUENCE_URL        e.g. https://your-org.atlassian.net/wiki
+#     CONFLUENCE_EMAIL      Confluence account email (preferred when using source-specific creds)
+#     CONFLUENCE_TOKEN      Confluence personal API token (preferred when using source-specific creds)
 #     ATLASSIAN_EMAIL       Atlassian account email
 #     ATLASSIAN_TOKEN       Atlassian personal API token
 
@@ -36,8 +40,10 @@ services:
     command: ["-config", "/config.yaml", "-source=jira"]
     environment:
       JIRA_URL: ${JIRA_URL}
-      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
-      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_TOKEN: ${JIRA_TOKEN:-}
+      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL:-}
+      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN:-}
     volumes:
       - ${CONFIG_FILE:-./config.yaml}:/config.yaml:ro
       - jira-state:/state
@@ -48,8 +54,10 @@ services:
     command: ["-config", "/config.yaml", "-source=confluence"]
     environment:
       CONFLUENCE_URL: ${CONFLUENCE_URL}
-      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL}
-      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN}
+      CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:-}
+      CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
+      ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL:-}
+      ATLASSIAN_TOKEN: ${ATLASSIAN_TOKEN:-}
     volumes:
       - ${CONFIG_FILE:-./config.yaml}:/config.yaml:ro
       - confluence-state:/state

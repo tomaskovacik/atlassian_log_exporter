@@ -31,62 +31,70 @@ type SavedState struct {
 }
 
 type Config struct {
-	APIUserAgent   string
-	APIToken       string
-	From           string
-	OrgID          string
-	LogToFile      bool
-	LogFilePath    string
-	Debug          bool
-	Query          string
-	Sleep          int
-	Source         string
-	BBWorkspace    string
-	BBUsername     string
-	BBAppPassword  string
-	JiraURL        string
-	ConfluenceURL  string
-	AtlassianEmail string
-	AtlassianToken string
-	GELFEnabled       bool
-	GELFHost          string
-	GELFPort          int
-	GELFProtocol      string
-	FluentBitEnabled  bool
-	FluentBitHost     string
-	FluentBitPort     int
-	FluentBitTag      string
+	APIUserAgent     string
+	APIToken         string
+	From             string
+	OrgID            string
+	LogToFile        bool
+	LogFilePath      string
+	Debug            bool
+	Query            string
+	Sleep            int
+	Source           string
+	BBWorkspace      string
+	BBUsername       string
+	BBAppPassword    string
+	JiraURL          string
+	JiraEmail        string
+	JiraToken        string
+	ConfluenceURL    string
+	ConfluenceEmail  string
+	ConfluenceToken  string
+	AtlassianEmail   string
+	AtlassianToken   string
+	GELFEnabled      bool
+	GELFHost         string
+	GELFPort         int
+	GELFProtocol     string
+	FluentBitEnabled bool
+	FluentBitHost    string
+	FluentBitPort    int
+	FluentBitTag     string
 }
 
 // YAMLConfig mirrors Config with yaml struct tags for file-based configuration.
 // Pointer types are used for booleans so that an explicit "false" in the YAML
 // file can be distinguished from a field that was simply omitted.
 type YAMLConfig struct {
-	APIUserAgent   string `yaml:"api_user_agent"`
-	APIToken       string `yaml:"api_token"`
-	From           string `yaml:"from"`
-	OrgID          string `yaml:"org_id"`
-	LogToFile      *bool  `yaml:"log_to_file"`
-	LogFilePath    string `yaml:"log_file"`
-	Debug          *bool  `yaml:"debug"`
-	Query          string `yaml:"query"`
-	Sleep          int    `yaml:"sleep"`
-	Source         string `yaml:"source"`
-	BBWorkspace    string `yaml:"workspace"`
-	BBUsername     string `yaml:"bb_username"`
-	BBAppPassword  string `yaml:"bb_app_password"`
-	JiraURL        string `yaml:"jira_url"`
-	ConfluenceURL  string `yaml:"confluence_url"`
-	AtlassianEmail string `yaml:"atlassian_email"`
-	AtlassianToken string `yaml:"atlassian_token"`
-	GELFEnabled       *bool  `yaml:"gelf_enabled"`
-	GELFHost          string `yaml:"gelf_host"`
-	GELFPort          int    `yaml:"gelf_port"`
-	GELFProtocol      string `yaml:"gelf_protocol"`
-	FluentBitEnabled  *bool  `yaml:"fluentbit_enabled"`
-	FluentBitHost     string `yaml:"fluentbit_host"`
-	FluentBitPort     int    `yaml:"fluentbit_port"`
-	FluentBitTag      string `yaml:"fluentbit_tag"`
+	APIUserAgent     string `yaml:"api_user_agent"`
+	APIToken         string `yaml:"api_token"`
+	From             string `yaml:"from"`
+	OrgID            string `yaml:"org_id"`
+	LogToFile        *bool  `yaml:"log_to_file"`
+	LogFilePath      string `yaml:"log_file"`
+	Debug            *bool  `yaml:"debug"`
+	Query            string `yaml:"query"`
+	Sleep            int    `yaml:"sleep"`
+	Source           string `yaml:"source"`
+	BBWorkspace      string `yaml:"workspace"`
+	BBUsername       string `yaml:"bb_username"`
+	BBAppPassword    string `yaml:"bb_app_password"`
+	JiraURL          string `yaml:"jira_url"`
+	JiraEmail        string `yaml:"jira_email"`
+	JiraToken        string `yaml:"jira_token"`
+	ConfluenceURL    string `yaml:"confluence_url"`
+	ConfluenceEmail  string `yaml:"confluence_email"`
+	ConfluenceToken  string `yaml:"confluence_token"`
+	AtlassianEmail   string `yaml:"atlassian_email"`
+	AtlassianToken   string `yaml:"atlassian_token"`
+	GELFEnabled      *bool  `yaml:"gelf_enabled"`
+	GELFHost         string `yaml:"gelf_host"`
+	GELFPort         int    `yaml:"gelf_port"`
+	GELFProtocol     string `yaml:"gelf_protocol"`
+	FluentBitEnabled *bool  `yaml:"fluentbit_enabled"`
+	FluentBitHost    string `yaml:"fluentbit_host"`
+	FluentBitPort    int    `yaml:"fluentbit_port"`
+	FluentBitTag     string `yaml:"fluentbit_tag"`
 }
 
 // loadYAMLConfig reads a YAML configuration file and returns a YAMLConfig.
@@ -145,8 +153,20 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.JiraURL != "" {
 		base.JiraURL = override.JiraURL
 	}
+	if override.JiraEmail != "" {
+		base.JiraEmail = override.JiraEmail
+	}
+	if override.JiraToken != "" {
+		base.JiraToken = override.JiraToken
+	}
 	if override.ConfluenceURL != "" {
 		base.ConfluenceURL = override.ConfluenceURL
+	}
+	if override.ConfluenceEmail != "" {
+		base.ConfluenceEmail = override.ConfluenceEmail
+	}
+	if override.ConfluenceToken != "" {
+		base.ConfluenceToken = override.ConfluenceToken
 	}
 	if override.AtlassianEmail != "" {
 		base.AtlassianEmail = override.AtlassianEmail
@@ -179,6 +199,42 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 		base.FluentBitTag = override.FluentBitTag
 	}
 	return base
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (cfg YAMLConfig) withLegacyCredentialFallbacks() YAMLConfig {
+	cfg.JiraEmail = firstNonEmpty(cfg.JiraEmail, cfg.AtlassianEmail)
+	cfg.JiraToken = firstNonEmpty(cfg.JiraToken, cfg.AtlassianToken)
+	cfg.ConfluenceEmail = firstNonEmpty(cfg.ConfluenceEmail, cfg.AtlassianEmail)
+	cfg.ConfluenceToken = firstNonEmpty(cfg.ConfluenceToken, cfg.AtlassianToken)
+	return cfg
+}
+
+func (cfg *Config) applySharedCredentialFlagFallbacks(explicit map[string]bool) {
+	if explicit["atlassian-email"] {
+		if !explicit["jira-email"] {
+			cfg.JiraEmail = cfg.AtlassianEmail
+		}
+		if !explicit["confluence-email"] {
+			cfg.ConfluenceEmail = cfg.AtlassianEmail
+		}
+	}
+	if explicit["atlassian-token"] {
+		if !explicit["jira-token"] {
+			cfg.JiraToken = cfg.AtlassianToken
+		}
+		if !explicit["confluence-token"] {
+			cfg.ConfluenceToken = cfg.AtlassianToken
+		}
+	}
 }
 
 // boolVal safely dereferences a *bool, returning false for nil.
@@ -470,24 +526,28 @@ func parseFlags() Config {
 	// Start with env-var defaults, then overlay values from the YAML config
 	// file so that explicit CLI flags can still override everything.
 	base := YAMLConfig{
-		APIUserAgent:   "curl/7.54.0",
-		APIToken:       os.Getenv("ATLASSIAN_ADMIN_API_TOKEN"),
-		OrgID:          os.Getenv("ATLASSIAN_ORGID"),
-		LogFilePath:    "log.txt",
-		Sleep:          200,
-		Source:         "admin",
-		BBWorkspace:    os.Getenv("BITBUCKET_WORKSPACE"),
-		BBUsername:     os.Getenv("BITBUCKET_USERNAME"),
-		BBAppPassword:  os.Getenv("BITBUCKET_APP_PASSWORD"),
-		JiraURL:        os.Getenv("JIRA_URL"),
-		ConfluenceURL:  os.Getenv("CONFLUENCE_URL"),
-		AtlassianEmail: os.Getenv("ATLASSIAN_EMAIL"),
-		AtlassianToken: os.Getenv("ATLASSIAN_TOKEN"),
-		GELFHost:       os.Getenv("GELF_HOST"),
-		GELFProtocol:   "udp",
-		FluentBitHost:  os.Getenv("FLUENTBIT_HOST"),
-		FluentBitTag:   os.Getenv("FLUENTBIT_TAG"),
-	}
+		APIUserAgent:    "curl/7.54.0",
+		APIToken:        os.Getenv("ATLASSIAN_ADMIN_API_TOKEN"),
+		OrgID:           os.Getenv("ATLASSIAN_ORGID"),
+		LogFilePath:     "log.txt",
+		Sleep:           200,
+		Source:          "admin",
+		BBWorkspace:     os.Getenv("BITBUCKET_WORKSPACE"),
+		BBUsername:      os.Getenv("BITBUCKET_USERNAME"),
+		BBAppPassword:   os.Getenv("BITBUCKET_APP_PASSWORD"),
+		JiraURL:         os.Getenv("JIRA_URL"),
+		JiraEmail:       os.Getenv("JIRA_EMAIL"),
+		JiraToken:       os.Getenv("JIRA_TOKEN"),
+		ConfluenceURL:   os.Getenv("CONFLUENCE_URL"),
+		ConfluenceEmail: os.Getenv("CONFLUENCE_EMAIL"),
+		ConfluenceToken: os.Getenv("CONFLUENCE_TOKEN"),
+		AtlassianEmail:  os.Getenv("ATLASSIAN_EMAIL"),
+		AtlassianToken:  os.Getenv("ATLASSIAN_TOKEN"),
+		GELFHost:        os.Getenv("GELF_HOST"),
+		GELFProtocol:    "udp",
+		FluentBitHost:   os.Getenv("FLUENTBIT_HOST"),
+		FluentBitTag:    os.Getenv("FLUENTBIT_TAG"),
+	}.withLegacyCredentialFallbacks()
 
 	if configFile != "" {
 		fileCfg, err := loadYAMLConfig(configFile)
@@ -496,7 +556,7 @@ func parseFlags() Config {
 			os.Exit(1)
 		}
 		// Overlay non-zero file values on top of env-var defaults.
-		base = mergeYAMLConfig(base, fileCfg)
+		base = mergeYAMLConfig(base, fileCfg.withLegacyCredentialFallbacks())
 	}
 
 	config := Config{}
@@ -514,9 +574,13 @@ func parseFlags() Config {
 	flag.StringVar(&config.BBUsername, "bb-username", base.BBUsername, "Bitbucket username for basic auth (bitbucket source)")
 	flag.StringVar(&config.BBAppPassword, "bb-app-password", base.BBAppPassword, "Bitbucket app password for basic auth (bitbucket source)")
 	flag.StringVar(&config.JiraURL, "jira-url", base.JiraURL, "Jira site URL, e.g. https://your-org.atlassian.net (jira source)")
+	flag.StringVar(&config.JiraEmail, "jira-email", base.JiraEmail, "Jira account email for basic auth (env: JIRA_EMAIL; falls back to -atlassian-email)")
+	flag.StringVar(&config.JiraToken, "jira-token", base.JiraToken, "Jira personal API token for basic auth (env: JIRA_TOKEN; falls back to -atlassian-token)")
 	flag.StringVar(&config.ConfluenceURL, "confluence-url", base.ConfluenceURL, "Confluence site URL, e.g. https://your-org.atlassian.net/wiki (confluence source)")
-	flag.StringVar(&config.AtlassianEmail, "atlassian-email", base.AtlassianEmail, "Atlassian account email for basic auth (jira/confluence source)")
-	flag.StringVar(&config.AtlassianToken, "atlassian-token", base.AtlassianToken, "Atlassian personal API token for basic auth (jira/confluence source)")
+	flag.StringVar(&config.ConfluenceEmail, "confluence-email", base.ConfluenceEmail, "Confluence account email for basic auth (env: CONFLUENCE_EMAIL; falls back to -atlassian-email)")
+	flag.StringVar(&config.ConfluenceToken, "confluence-token", base.ConfluenceToken, "Confluence personal API token for basic auth (env: CONFLUENCE_TOKEN; falls back to -atlassian-token)")
+	flag.StringVar(&config.AtlassianEmail, "atlassian-email", base.AtlassianEmail, "Shared Atlassian account email fallback for Jira/Confluence basic auth")
+	flag.StringVar(&config.AtlassianToken, "atlassian-token", base.AtlassianToken, "Shared Atlassian personal API token fallback for Jira/Confluence basic auth")
 	flag.BoolVar(&config.GELFEnabled, "gelf-enabled", boolVal(base.GELFEnabled), "Enable GELF output to Graylog")
 	flag.StringVar(&config.GELFHost, "gelf-host", base.GELFHost, "Graylog GELF host (env: GELF_HOST)")
 	flag.IntVar(&config.GELFPort, "gelf-port", base.GELFPort, "Graylog GELF port (default 12201)")
@@ -528,6 +592,11 @@ func parseFlags() Config {
 	flag.String("config", "", "(Optional) Path to YAML configuration file")
 
 	flag.Parse()
+	explicitFlags := make(map[string]bool)
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		explicitFlags[f.Name] = true
+	})
+	config.applySharedCredentialFlagFallbacks(explicitFlags)
 
 	// Apply GELF port default that cannot be set via a flag default (zero-value int).
 	if config.GELFPort == 0 {
@@ -565,14 +634,14 @@ func parseFlags() Config {
 			os.Exit(1)
 		}
 	case "jira":
-		if config.JiraURL == "" || config.AtlassianEmail == "" || config.AtlassianToken == "" {
-			fmt.Fprintln(os.Stderr, "jira source requires -jira-url, -atlassian-email, and -atlassian-token")
+		if config.JiraURL == "" || config.JiraEmail == "" || config.JiraToken == "" {
+			fmt.Fprintln(os.Stderr, "jira source requires -jira-url plus either -jira-email/-jira-token or shared -atlassian-email/-atlassian-token")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
 	case "confluence":
-		if config.ConfluenceURL == "" || config.AtlassianEmail == "" || config.AtlassianToken == "" {
-			fmt.Fprintln(os.Stderr, "confluence source requires -confluence-url, -atlassian-email, and -atlassian-token")
+		if config.ConfluenceURL == "" || config.ConfluenceEmail == "" || config.ConfluenceToken == "" {
+			fmt.Fprintln(os.Stderr, "confluence source requires -confluence-url plus either -confluence-email/-confluence-token or shared -atlassian-email/-atlassian-token")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
@@ -1248,7 +1317,7 @@ func initJiraClient(config Config, log *zap.SugaredLogger) (*jirav2.Client, erro
 	if err != nil {
 		return nil, err
 	}
-	jiraClient.Auth.SetBasicAuth(config.AtlassianEmail, config.AtlassianToken)
+	jiraClient.Auth.SetBasicAuth(config.JiraEmail, config.JiraToken)
 	jiraClient.Auth.SetUserAgent(config.APIUserAgent)
 	return jiraClient, nil
 }
@@ -1529,8 +1598,8 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 		log.Errorf("Error parsing last record date %q: %v", pages[0].Records[0].Created, err)
 	}
 
-	jiraMigrationResolver := newJiraBulkMigrationUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	jiraResolver := newJiraUserResolver(config.JiraURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	jiraMigrationResolver := newJiraBulkMigrationUserResolver(config.JiraURL, config.JiraEmail, config.JiraToken, &http.Client{}, log)
+	jiraResolver := newJiraUserResolver(config.JiraURL, config.JiraEmail, config.JiraToken, &http.Client{}, log)
 	processJiraAuditRecords(pages, log, gelfWriter, config.GELFHost, jiraResolver, jiraMigrationResolver, fluentBitClient)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
@@ -1551,9 +1620,42 @@ func initConfluenceClient(config Config, log *zap.SugaredLogger) (*confluence.Cl
 	if err != nil {
 		return nil, err
 	}
-	confluenceClient.Auth.SetBasicAuth(config.AtlassianEmail, config.AtlassianToken)
+	confluenceClient.Auth.SetBasicAuth(config.ConfluenceEmail, config.ConfluenceToken)
 	confluenceClient.Auth.SetUserAgent(config.APIUserAgent)
 	return confluenceClient, nil
+}
+
+func resolveConfluenceAuditNext(baseURL, next string) (string, error) {
+	if next == "" {
+		return "", nil
+	}
+
+	nextURL, err := url.Parse(next)
+	if err != nil {
+		return "", err
+	}
+
+	if !strings.HasPrefix(next, "/") && !nextURL.IsAbs() {
+		return next, nil
+	}
+
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+
+	resolved := nextURL
+	if !nextURL.IsAbs() {
+		resolved = base.ResolveReference(nextURL)
+	}
+
+	basePath := strings.TrimRight(base.Path, "/")
+	nextPath := resolved.Path
+	if basePath != "" && !strings.HasPrefix(nextPath, basePath+"/") && nextPath != basePath {
+		resolved.Path = basePath + "/" + strings.TrimLeft(nextPath, "/")
+	}
+
+	return resolved.String(), nil
 }
 
 func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluence.Client, config Config, startTime time.Time, log *zap.SugaredLogger) ([]ConfluenceAuditPage, error) {
@@ -1600,7 +1702,10 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 			break
 		}
 
-		endpoint = page.Links.Next
+		endpoint, err = resolveConfluenceAuditNext(confluenceClient.Site.String(), page.Links.Next)
+		if err != nil {
+			return nil, err
+		}
 		time.Sleep(time.Duration(config.Sleep) * time.Millisecond)
 	}
 
@@ -1741,8 +1846,8 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	// Records are returned newest-first; pick the first record of the first page as checkpoint.
 	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
 
-	groupResolver := newConfluenceGroupResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
-	cfUserResolver := newConfluenceUserResolver(config.ConfluenceURL, config.AtlassianEmail, config.AtlassianToken, &http.Client{}, log)
+	groupResolver := newConfluenceGroupResolver(config.ConfluenceURL, config.ConfluenceEmail, config.ConfluenceToken, &http.Client{}, log)
+	cfUserResolver := newConfluenceUserResolver(config.ConfluenceURL, config.ConfluenceEmail, config.ConfluenceToken, &http.Client{}, log)
 	processConfluenceAuditRecords(pages, log, gelfWriter, config.GELFHost, groupResolver, cfUserResolver, fluentBitClient)
 
 	log.Debugf("Last event time: %v", state.LastEventDate)

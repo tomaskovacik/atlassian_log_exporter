@@ -24,10 +24,6 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 - **Jira source**: Jira site URL, Atlassian account email, and personal API token
 - **Confluence source**: Confluence site URL, Atlassian account email, and personal API token
 
-> **ℹ️ Forked dependency**
->
-> This project uses a [custom fork of go-atlassian](https://github.com/tomaskovacik/go-atlassian) (`github.com/tomaskovacik/go-atlassian/v2 v2.11.1-kovo`) that adds `AuthorAccountID` to `AuditRecordScheme`. The `replace` directive in `go.mod` handles this automatically — no manual steps are required beyond the standard `go mod tidy`.
-
 ## Docker
 
 Pre-built images are published to the GitHub Container Registry on every push to `main` and on every `v*` tag:
@@ -82,7 +78,7 @@ docker build -t atlassian_log_exporter .
 1. Clone the repository:
 
    ```sh
-   git clone https://github.com/m1keru/atlassian_log_exporter.git
+   git clone https://github.com/tomaskovacik/atlassian_log_exporter.git
    ```
 
 2. Navigate to the project directory:
@@ -147,14 +143,19 @@ Run the application with the following command:
 #### Jira source flags
 
 - `-jira-url`: Jira site URL, e.g. `https://your-org.atlassian.net` (env: `JIRA_URL`)
-- `-atlassian-email`: Atlassian account email for basic auth (env: `ATLASSIAN_EMAIL`)
-- `-atlassian-token`: Atlassian personal API token for basic auth (env: `ATLASSIAN_TOKEN`)
+- `-jira-email`: Jira account email for basic auth (env: `JIRA_EMAIL`; falls back to `-atlassian-email` / `ATLASSIAN_EMAIL`)
+- `-jira-token`: Jira personal API token for basic auth (env: `JIRA_TOKEN`; falls back to `-atlassian-token` / `ATLASSIAN_TOKEN`)
 
 #### Confluence source flags
 
 - `-confluence-url`: Confluence site URL, e.g. `https://your-org.atlassian.net/wiki` (env: `CONFLUENCE_URL`)
-- `-atlassian-email`: Atlassian account email for basic auth (env: `ATLASSIAN_EMAIL`)
-- `-atlassian-token`: Atlassian personal API token for basic auth (env: `ATLASSIAN_TOKEN`)
+- `-confluence-email`: Confluence account email for basic auth (env: `CONFLUENCE_EMAIL`; falls back to `-atlassian-email` / `ATLASSIAN_EMAIL`)
+- `-confluence-token`: Confluence personal API token for basic auth (env: `CONFLUENCE_TOKEN`; falls back to `-atlassian-token` / `ATLASSIAN_TOKEN`)
+
+#### Shared Jira / Confluence fallback flags
+
+- `-atlassian-email`: Shared fallback email for Jira and Confluence basic auth (env: `ATLASSIAN_EMAIL`)
+- `-atlassian-token`: Shared fallback token for Jira and Confluence basic auth (env: `ATLASSIAN_TOKEN`)
 
 ### Environment Variables
 
@@ -166,50 +167,82 @@ Run the application with the following command:
 | `BITBUCKET_USERNAME`        | Bitbucket username                       |
 | `BITBUCKET_APP_PASSWORD`    | Bitbucket app password                   |
 | `JIRA_URL`                  | Jira site URL (jira source)              |
+| `JIRA_EMAIL`                | Jira account email (preferred override)  |
+| `JIRA_TOKEN`                | Jira personal API token (preferred override) |
 | `CONFLUENCE_URL`            | Confluence site URL (confluence source)  |
-| `ATLASSIAN_EMAIL`           | Atlassian account email (jira/confluence)|
-| `ATLASSIAN_TOKEN`           | Atlassian personal API token (jira/confluence)|
+| `CONFLUENCE_EMAIL`          | Confluence account email (preferred override) |
+| `CONFLUENCE_TOKEN`          | Confluence personal API token (preferred override) |
+| `ATLASSIAN_EMAIL`           | Shared fallback email for Jira/Confluence |
+| `ATLASSIAN_TOKEN`           | Shared fallback token for Jira/Confluence |
 | `GELF_HOST`                 | Graylog GELF server hostname or IP       |
 | `FLUENTBIT_HOST`            | Fluent Bit HTTP input hostname           |
 | `FLUENTBIT_TAG`             | Fluent Bit tag / URL path segment        |
 
 ## Required Token Scopes / Permissions
 
-### Admin source — Atlassian Admin API Token
+| Source | Auth used by exporter | Audit access needed | Extra lookup access used for name enrichment | Account / role requirement |
+|--------|------------------------|---------------------|----------------------------------------------|----------------------------|
+| `admin` | Bearer token from Atlassian Admin API key | `read:events:admin` | `GET /users/{account_id}/manage/profile` is also called to resolve display names. Atlassian does not publish an OAuth2 scope for this endpoint; their docs state OAuth2 apps cannot access it directly. | **Organisation Admin** in Atlassian Admin. In practice this also requires [Atlassian Guard](https://www.atlassian.com/software/access) because the organisation API key is created in `admin.atlassian.com`. |
+| `bitbucket` | Bitbucket username + app password | App password permission: `Workspace -> Audit logs: Read` | None | Access to the target Bitbucket workspace and an app password with audit-log read permission |
+| `jira` | Basic Auth: Jira-specific email/token, or shared Atlassian fallback | Audit API scope: `read:audit-log:jira` | Name enrichment calls `GET /rest/api/3/user/bulk/migration` and `GET /rest/api/2/user?accountId=...`. For OAuth-based access, these correspond to `read:jira-user` or granular scopes `read:user:jira`, `read:application-role:jira`, `read:group:jira`, and `read:avatar:jira`. | **Jira Administrator** global permission (`Administer Jira`) on the target site |
+| `confluence` | Basic Auth: Confluence-specific email/token, or shared Atlassian fallback | `read:audit-log:confluence` | Name enrichment calls `GET /wiki/rest/api/user?accountId=...` and `GET /wiki/rest/api/group/by-id?id=...`. The documented scopes are `read:confluence-user` / beta `read:content-details:confluence` and `read:confluence-groups` / beta `read:group:confluence`. | **Confluence Administrator** or **System Administrator** global permission on the target site |
 
-The API token must be a **service account API key** created in [Atlassian Admin](https://admin.atlassian.com) with the following OAuth scope granted:
-
-| Scope | Description |
-|-------|-------------|
-| `read:audit-log:admin` | Read organisation-level audit log events |
-
-The token owner must have the **Organisation Admin** role in the Atlassian organisation.
-
-### Bitbucket source — App Password
-
-The Bitbucket [App Password](https://bitbucket.org/account/settings/app-passwords/) must have the following permission enabled:
-
-| Permission category | Required permission |
-|---------------------|---------------------|
-| Workspace | `Audit logs: Read` |
-
-### Jira source — Personal API Token
-
-Jira uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Jira Administrator** global permission (`Administer Jira`) on the target site, as the audit log API is restricted to site administrators.
-
-#### Author display name resolution for `ug:`-prefixed author keys
-
-Jira Cloud audit records sometimes carry an `AuthorKey` in `ug:UUID` format (a raw Atlassian account ID). The exporter automatically resolves these IDs to display names using the Jira REST API (`GET {jiraURL}/rest/api/2/user?accountId=...`) with the same Basic Auth credentials already required for audit log access. The resolved name is emitted as `_author_display_name` in log output and GELF fields.
-
-> **ℹ️ No Atlassian Guard subscription required**
+> **Note**
 >
-> Unlike the **admin source** (organisation-level audit log), the Jira source uses only the standard Jira REST API for both audit record retrieval and author name resolution. A regular Jira Administrator personal API token is sufficient — no [Atlassian Guard](https://www.atlassian.com/software/access) (formerly Atlassian Access) subscription is needed.
->
-> The admin source *does* require Guard: it authenticates with an organisation-level API key from [admin.atlassian.com](https://admin.atlassian.com), which can only be created when Guard is active on your Atlassian organisation.
+> The current exporter implementation uses **Basic Auth** for Jira and Confluence, not OAuth Bearer tokens. The scope names above are the documented equivalents for those REST endpoints, but in day-to-day use the decisive factor is usually whether the Atlassian account behind the token has the required site permissions.
 
-### Confluence source — Personal API Token
+## Scoped API tokens for Jira and Confluence
 
-Confluence uses Basic Auth (email + [personal API token](https://id.atlassian.com/manage-profile/security/api-tokens)). The Atlassian account associated with the token must have the **Confluence Administrator** (or **System Administrator**) global permission on the target site, as the audit log API is restricted to site administrators.
+If you want to switch from classic Atlassian API tokens to **scoped API tokens**, use the Atlassian gateway domain described in Atlassian's support guidance:
+
+- [Scoped API tokens in Confluence Cloud](https://support.atlassian.com/confluence/kb/scoped-api-tokens-in-confluence-cloud/)
+- [How to find your Atlassian Cloud site's Cloud ID](https://support.atlassian.com/jira/kb/retrieve-my-atlassian-sites-cloud-id/)
+
+### Why this matters
+
+Classic tokens usually work with site-local URLs such as:
+
+```text
+https://your-org.atlassian.net/
+https://your-org.atlassian.net/wiki/
+```
+
+Scoped tokens do **not**. Atlassian requires the `api.atlassian.com/ex/...` gateway instead:
+
+```text
+https://api.atlassian.com/ex/jira/<cloud_id>/
+https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/
+```
+
+### Recommended configuration
+
+Use **source-specific credentials** for Jira and Confluence when working with scoped tokens. The shared `atlassian_email` / `atlassian_token` fields are still supported as fallbacks, but they are not a good fit when each product uses a different scoped token.
+
+```yaml
+jira_url: "https://api.atlassian.com/ex/jira/<cloud_id>/"
+jira_email: "user@example.com"
+jira_token: "your-jira-scoped-token"
+
+confluence_url: "https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/"
+confluence_email: "user@example.com"
+confluence_token: "your-confluence-scoped-token"
+```
+
+### URL shape hints
+
+These URL shapes are important with the current exporter implementation:
+
+| Source | Recommended base URL | Notes |
+|--------|-----------------------|-------|
+| Jira | `https://api.atlassian.com/ex/jira/<cloud_id>/` | Keep the trailing slash. Jira audit fetch uses relative paths from this base. |
+| Confluence | `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/` | Include both `/wiki/` and the trailing slash. Confluence audit and lookup calls depend on it. |
+
+### Current implementation caveats
+
+1. `admin` and `bitbucket` do **not** use the `api.atlassian.com/ex/...` gateway.
+2. Confluence scoped-token audit fetch is supported, and pagination is normalized so Atlassian's root-relative `next` links continue to work under the gateway base.
+3. Jira audit fetch uses offset pagination, so it does not have the same `next`-link issue as Confluence.
+4. The exporter still authenticates Jira and Confluence with **Basic Auth** (`email + token`). The difference for scoped tokens is mainly the **base URL** and the need for **separate product-specific tokens**.
 
 ## Configuration File
 
@@ -250,9 +283,13 @@ CLI flags override anything set in the file:
 | `bb_username`     | `-bb-username`       | `BITBUCKET_USERNAME`        | Bitbucket username |
 | `bb_app_password` | `-bb-app-password`   | `BITBUCKET_APP_PASSWORD`    | Bitbucket app password |
 | `jira_url`        | `-jira-url`          | `JIRA_URL`                  | Jira site URL |
+| `jira_email`      | `-jira-email`        | `JIRA_EMAIL`                | Jira account email |
+| `jira_token`      | `-jira-token`        | `JIRA_TOKEN`                | Jira personal API token |
 | `confluence_url`  | `-confluence-url`    | `CONFLUENCE_URL`            | Confluence site URL |
-| `atlassian_email` | `-atlassian-email`   | `ATLASSIAN_EMAIL`           | Atlassian account email |
-| `atlassian_token` | `-atlassian-token`   | `ATLASSIAN_TOKEN`           | Atlassian personal API token |
+| `confluence_email`| `-confluence-email`  | `CONFLUENCE_EMAIL`          | Confluence account email |
+| `confluence_token`| `-confluence-token`  | `CONFLUENCE_TOKEN`          | Confluence personal API token |
+| `atlassian_email` | `-atlassian-email`   | `ATLASSIAN_EMAIL`           | Shared fallback email for Jira / Confluence |
+| `atlassian_token` | `-atlassian-token`   | `ATLASSIAN_TOKEN`           | Shared fallback token for Jira / Confluence |
 | `gelf_enabled`        | `-gelf-enabled`          | —                           | Enable GELF output to Graylog |
 | `gelf_host`           | `-gelf-host`             | `GELF_HOST`                 | Graylog GELF server hostname or IP |
 | `gelf_port`           | `-gelf-port`             | —                           | Graylog GELF port (default 12201) |
@@ -305,8 +342,8 @@ BITBUCKET_APP_PASSWORD=my-app-password \
 ./atlassian_log_exporter \
   -source=jira \
   -jira-url=https://your-org.atlassian.net \
-  -atlassian-email=user@example.com \
-  -atlassian-token=your-api-token \
+  -jira-email=user@example.com \
+  -jira-token=your-api-token \
   -from=2023-09-01T00:00:00Z \
   -debug
 ```
@@ -315,8 +352,8 @@ or using environment variables:
 
 ```sh
 JIRA_URL=https://your-org.atlassian.net \
-ATLASSIAN_EMAIL=user@example.com \
-ATLASSIAN_TOKEN=your-api-token \
+JIRA_EMAIL=user@example.com \
+JIRA_TOKEN=your-api-token \
 ./atlassian_log_exporter -source=jira
 ```
 
@@ -326,8 +363,8 @@ ATLASSIAN_TOKEN=your-api-token \
 ./atlassian_log_exporter \
   -source=confluence \
   -confluence-url=https://your-org.atlassian.net/wiki \
-  -atlassian-email=user@example.com \
-  -atlassian-token=your-api-token \
+  -confluence-email=user@example.com \
+  -confluence-token=your-api-token \
   -from=2023-09-01T00:00:00Z \
   -debug
 ```
@@ -336,8 +373,8 @@ or using environment variables:
 
 ```sh
 CONFLUENCE_URL=https://your-org.atlassian.net/wiki \
-ATLASSIAN_EMAIL=user@example.com \
-ATLASSIAN_TOKEN=your-api-token \
+CONFLUENCE_EMAIL=user@example.com \
+CONFLUENCE_TOKEN=your-api-token \
 ./atlassian_log_exporter -source=confluence
 ```
 

@@ -59,16 +59,20 @@ log_file: log.txt
 # ---------------------------------------------------------------------------
 
 # jira_url: ""           # JIRA_URL env var  (e.g. https://your-org.atlassian.net)
-# atlassian_email: ""    # ATLASSIAN_EMAIL env var
-# atlassian_token: ""    # ATLASSIAN_TOKEN env var
+# jira_email: ""         # JIRA_EMAIL env var
+# jira_token: ""         # JIRA_TOKEN env var
+# atlassian_email: ""    # Shared fallback for Jira/Confluence (ATLASSIAN_EMAIL env var)
+# atlassian_token: ""    # Shared fallback for Jira/Confluence (ATLASSIAN_TOKEN env var)
 
 # ---------------------------------------------------------------------------
 # Source: confluence
 # ---------------------------------------------------------------------------
 
 # confluence_url: ""     # CONFLUENCE_URL env var  (e.g. https://your-org.atlassian.net/wiki)
-# atlassian_email: ""    # ATLASSIAN_EMAIL env var
-# atlassian_token: ""    # ATLASSIAN_TOKEN env var
+# confluence_email: ""   # CONFLUENCE_EMAIL env var
+# confluence_token: ""   # CONFLUENCE_TOKEN env var
+# atlassian_email: ""    # Shared fallback for Jira/Confluence (ATLASSIAN_EMAIL env var)
+# atlassian_token: ""    # Shared fallback for Jira/Confluence (ATLASSIAN_TOKEN env var)
 
 # ---------------------------------------------------------------------------
 # Graylog GELF output (optional)
