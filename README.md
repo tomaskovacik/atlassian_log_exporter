@@ -184,8 +184,8 @@ Run the application with the following command:
 |--------|------------------------|---------------------|----------------------------------------------|----------------------------|
 | `admin` | Bearer token from Atlassian Admin API key | `read:events:admin` | `GET /users/{account_id}/manage/profile` is also called to resolve display names. Atlassian does not publish an OAuth2 scope for this endpoint; their docs state OAuth2 apps cannot access it directly. | **Organisation Admin** in Atlassian Admin. In practice this also requires [Atlassian Guard](https://www.atlassian.com/software/access) because the organisation API key is created in `admin.atlassian.com`. |
 | `bitbucket` | Bitbucket username + app password | App password permission: `Workspace -> Audit logs: Read` | None | Access to the target Bitbucket workspace and an app password with audit-log read permission |
-| `jira` | Basic Auth: Jira-specific email/token, or shared Atlassian fallback | Audit API scope: `read:audit-log:jira` | Name enrichment calls `GET /rest/api/3/user/bulk/migration` and `GET /rest/api/2/user?accountId=...`. For OAuth-based access, these correspond to `read:jira-user` or granular scopes `read:user:jira`, `read:application-role:jira`, `read:group:jira`, and `read:avatar:jira`. | **Jira Administrator** global permission (`Administer Jira`) on the target site |
-| `confluence` | Basic Auth: Confluence-specific email/token, or shared Atlassian fallback | `read:audit-log:confluence` | Name enrichment calls `GET /wiki/rest/api/user?accountId=...` and `GET /wiki/rest/api/group/by-id?id=...`. The documented scopes are `read:confluence-user` / beta `read:content-details:confluence` and `read:confluence-groups` / beta `read:group:confluence`. | **Confluence Administrator** or **System Administrator** global permission on the target site |
+| `jira` | Basic Auth: Jira-specific email/token, or shared Atlassian fallback | Audit API scope: `read:audit-log:jira` | Name enrichment calls `GET /rest/api/3/user/bulk/migration` and `GET /rest/api/2/user?accountId=...`. In current user testing against the new `api.atlassian.com/ex/jira/<cloud_id>/...` gateway, the working scope set was `read:jira-user`, `read:user:jira`, and `read:group:jira`. | **Jira Administrator** global permission (`Administer Jira`) on the target site |
+| `confluence` | Basic Auth: Confluence-specific email/token, or shared Atlassian fallback | `read:audit-log:confluence` | Name enrichment calls `GET /wiki/rest/api/user?accountId=...` and `GET /wiki/rest/api/group/by-id?id=...`. Classic scope: `read:confluence-user`. Granular scopes: `read:user:confluence`, `read:group:confluence`. | **Confluence Administrator** or **System Administrator** global permission on the target site |
 
 > **Note**
 >
@@ -236,6 +236,22 @@ These URL shapes are important with the current exporter implementation:
 |--------|-----------------------|-------|
 | Jira | `https://api.atlassian.com/ex/jira/<cloud_id>/` | Keep the trailing slash. Jira audit fetch uses relative paths from this base. |
 | Confluence | `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/` | Include both `/wiki/` and the trailing slash. Confluence audit and lookup calls depend on it. |
+
+### Scopes for the new `api.atlassian.com/ex/...` endpoints
+
+Use the following scope sets when switching Jira and Confluence to scoped API tokens.
+
+| Source | Endpoint family | Scopes |
+|--------|-----------------|--------|
+| Jira | `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/2/auditing/record` | `read:audit-log:jira` |
+| Jira | `https://api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/user/bulk/migration` and `.../rest/api/2/user` | **Working set confirmed in user testing:** `read:jira-user`, `read:user:jira`, `read:group:jira` |
+| Confluence | `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/audit` | `read:audit-log:confluence` |
+| Confluence | `https://api.atlassian.com/ex/confluence/<cloud_id>/wiki/rest/api/user` and `.../wiki/rest/api/group/by-id` | Classic: `read:confluence-user`. Granular: `read:user:confluence`, `read:group:confluence` |
+
+Notes:
+
+1. Jira lookup currently appears to work reliably with the mixed classic + granular scope set above.
+2. For the full Confluence granular scope set used by audit + lookup, start with `read:audit-log:confluence`, `read:user:confluence`, and `read:group:confluence`.
 
 ### Current implementation caveats
 
