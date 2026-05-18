@@ -431,9 +431,14 @@ func sendGELF(w GELFWriter, host, short string, ts time.Time, extra map[string]i
 		return
 	}
 
+	messageHost := host
+	if source, ok := extra["_source"].(string); ok && source != "" {
+		messageHost = source
+	}
+
 	m := &gelf.Message{
 		Version:  "1.1",
-		Host:     host,
+		Host:     messageHost,
 		Short:    short,
 		TimeUnix: float64(ts.Unix()),
 		Level:    6, // informational
@@ -701,6 +706,24 @@ func newUserResolver(apiToken string, httpClient *http.Client, log *zap.SugaredL
 	}
 }
 
+func resolveAPIURL(baseURL, requestPath string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+
+	if !strings.HasSuffix(base.Path, "/") {
+		base.Path += "/"
+	}
+
+	relative, err := url.Parse(strings.TrimPrefix(requestPath, "/"))
+	if err != nil {
+		return "", err
+	}
+
+	return base.ResolveReference(relative).String(), nil
+}
+
 // newJiraBulkMigrationUserResolver creates a UserResolver that resolves
 // "ug:UUID" user keys to display names via a two-step lookup:
 //  1. GET {jiraURL}/rest/api/3/user/bulk/migration?key=ug:{UUID} → accountId
@@ -721,7 +744,10 @@ func newJiraBulkMigrationUserResolver(jiraURL, email, token string, httpClient *
 		buildRequest: func(id string) (*http.Request, error) {
 			// resolve() strips the "ug:" prefix; add it back because the bulk
 			// migration endpoint expects the full key in "ug:UUID" form.
-			u := jiraURL + "/rest/api/3/user/bulk/migration?key=ug:" + url.QueryEscape(id)
+			u, err := resolveAPIURL(jiraURL, "rest/api/3/user/bulk/migration?key=ug:"+url.QueryEscape(id))
+			if err != nil {
+				return nil, err
+			}
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
 				return nil, err
@@ -761,7 +787,10 @@ func newJiraUserResolver(jiraURL, email, token string, httpClient *http.Client, 
 		cache:      make(map[string]string),
 		log:        log,
 		buildRequest: func(id string) (*http.Request, error) {
-			u := jiraURL + "/rest/api/2/user?accountId=" + url.QueryEscape(id)
+			u, err := resolveAPIURL(jiraURL, "rest/api/2/user?accountId="+url.QueryEscape(id))
+			if err != nil {
+				return nil, err
+			}
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
 				return nil, err
@@ -789,7 +818,10 @@ func newConfluenceGroupResolver(confluenceURL, email, token string, httpClient *
 		cache:      make(map[string]string),
 		log:        log,
 		buildRequest: func(id string) (*http.Request, error) {
-			u := confluenceURL + "/rest/api/group/by-id?id=" + url.QueryEscape(id)
+			u, err := resolveAPIURL(confluenceURL, "rest/api/group/by-id?id="+url.QueryEscape(id))
+			if err != nil {
+				return nil, err
+			}
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
 				return nil, err
@@ -817,7 +849,10 @@ func newConfluenceUserResolver(confluenceURL, email, token string, httpClient *h
 		cache:      make(map[string]string),
 		log:        log,
 		buildRequest: func(id string) (*http.Request, error) {
-			u := confluenceURL + "/rest/api/user?accountId=" + url.QueryEscape(id)
+			u, err := resolveAPIURL(confluenceURL, "rest/api/user?accountId="+url.QueryEscape(id))
+			if err != nil {
+				return nil, err
+			}
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
 				return nil, err

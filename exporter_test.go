@@ -14,6 +14,7 @@ import (
 
 	"github.com/ctreminiom/go-atlassian/v2/pkg/infra/models"
 	"go.uber.org/zap"
+	"gopkg.in/Graylog2/go-gelf.v2/gelf"
 )
 
 // nopLogger returns a no-op sugared logger suitable for tests.
@@ -797,6 +798,22 @@ func TestConfluenceGroupResolver_Success(t *testing.T) {
 	}
 }
 
+func TestConfluenceGroupResolver_TrailingSlashBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/rest/api/group/by-id" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"name":"engineering-team"}`))
+	}))
+	defer server.Close()
+
+	resolver := newConfluenceGroupResolver(server.URL+"/wiki/", "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("group-uuid")
+	if got != "engineering-team" {
+		t.Errorf("got %q, want %q", got, "engineering-team")
+	}
+}
+
 func TestConfluenceGroupResolver_Cache(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -828,6 +845,22 @@ func TestConfluenceUserResolver_Success(t *testing.T) {
 	defer server.Close()
 
 	resolver := newConfluenceUserResolver(server.URL, "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("712020:abc")
+	if got != "Diana Rybanska" {
+		t.Errorf("got %q, want %q", got, "Diana Rybanska")
+	}
+}
+
+func TestConfluenceUserResolver_TrailingSlashBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/rest/api/user" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"displayName":"Diana Rybanska"}`))
+	}))
+	defer server.Close()
+
+	resolver := newConfluenceUserResolver(server.URL+"/wiki/", "u", "t", server.Client(), nopLogger())
 	got := resolver.resolve("712020:abc")
 	if got != "Diana Rybanska" {
 		t.Errorf("got %q, want %q", got, "Diana Rybanska")
@@ -1384,6 +1417,22 @@ func TestJiraUserResolver_Success(t *testing.T) {
 	}
 }
 
+func TestJiraUserResolver_TrailingSlashBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ex/jira/cloud-id/rest/api/2/user" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"displayName":"Alice Jira"}`))
+	}))
+	defer server.Close()
+
+	resolver := newJiraUserResolver(server.URL+"/ex/jira/cloud-id/", "user@example.com", "secret", server.Client(), nopLogger())
+	got := resolver.resolve("abc123")
+	if got != "Alice Jira" {
+		t.Errorf("got %q, want %q", got, "Alice Jira")
+	}
+}
+
 func TestJiraUserResolver_CleanAccountID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("accountId"); got != "stripped-id" {
@@ -1446,6 +1495,27 @@ func TestJiraBulkMigrationResolver_EmptyUsername_FallsBackToUserAPI(t *testing.T
 	got := resolver.resolve("ug:cloud-uuid")
 	if got != wantName {
 		t.Errorf("got %q, want %q", got, wantName)
+	}
+}
+
+func TestJiraBulkMigrationResolver_TrailingSlashBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/ex/jira/cloud-id/rest/api/3/user/bulk/migration":
+			_, _ = w.Write([]byte(`[{"key":"ug:cloud-uuid","accountId":"cloud-account-id","username":""}]`))
+		case "/ex/jira/cloud-id/rest/api/2/user":
+			_, _ = w.Write([]byte(`{"displayName":"Alice Cloud"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	resolver := newJiraBulkMigrationUserResolver(server.URL+"/ex/jira/cloud-id/", "u", "t", server.Client(), nopLogger())
+	got := resolver.resolve("ug:cloud-uuid")
+	if got != "Alice Cloud" {
+		t.Errorf("got %q, want %q", got, "Alice Cloud")
 	}
 }
 
@@ -1575,6 +1645,49 @@ func TestSendFluentBit_PostsJSON(t *testing.T) {
 	// Underscore-prefixed keys must not appear.
 	if _, ok := payload["_source"]; ok {
 		t.Error("field \"_source\" must be stripped to \"source\"")
+	}
+}
+
+type captureGELFWriter struct {
+	message *gelf.Message
+}
+
+func (w *captureGELFWriter) WriteMessage(m *gelf.Message) error {
+	w.message = m
+	return nil
+}
+
+func (w *captureGELFWriter) Close() error {
+	return nil
+}
+
+func TestSendGELF_UsesSourceAsHost(t *testing.T) {
+	writer := &captureGELFWriter{}
+
+	sendGELF(writer, "graylog.example.com", "jira audit: user updated", time.Unix(123, 0), map[string]interface{}{
+		"_source": "jira",
+	}, nopLogger())
+
+	if writer.message == nil {
+		t.Fatal("expected GELF message to be written")
+	}
+	if writer.message.Host != "jira" {
+		t.Fatalf("got host %q, want %q", writer.message.Host, "jira")
+	}
+}
+
+func TestSendGELF_FallsBackToConfiguredHost(t *testing.T) {
+	writer := &captureGELFWriter{}
+
+	sendGELF(writer, "graylog.example.com", "audit", time.Unix(123, 0), map[string]interface{}{
+		"_action": "login",
+	}, nopLogger())
+
+	if writer.message == nil {
+		t.Fatal("expected GELF message to be written")
+	}
+	if writer.message.Host != "graylog.example.com" {
+		t.Fatalf("got host %q, want %q", writer.message.Host, "graylog.example.com")
 	}
 }
 
