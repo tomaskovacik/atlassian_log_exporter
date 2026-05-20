@@ -63,6 +63,15 @@ services:
       - confluence-state:/state
     working_dir: /state
 
+  bb-log-exporter:
+    image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
+    command: ["-config", "/config.yaml", "-source=bitbucket"]
+    volumes:
+      - ${CONFIG_FILE:-./config.yaml}:/config.yaml:ro
+      - bb-state:/state
+    working_dir: /state
+
 volumes:
   jira-state:
   confluence-state:
+  bb-state:

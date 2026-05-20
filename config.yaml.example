@@ -52,7 +52,7 @@ log_file: log.txt
 
 # workspace: ""          # BITBUCKET_WORKSPACE env var
 # bb_username: ""        # BITBUCKET_USERNAME env var
-# bb_app_password: ""    # BITBUCKET_APP_PASSWORD env var
+# bb_token: ""           # BITBUCKET_TOKEN env var
 
 # ---------------------------------------------------------------------------
 # Source: jira

@@ -5,7 +5,8 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 ## Features
 
 - Fetches events from the Atlassian Admin API (organisation-level audit log)
-- Fetches events from the Bitbucket Cloud workspace audit log
+- Fetches events from the Bitbucket Cloud workspace audit log (requires Atlassian Guard)
+- Fetches commits across all workspace repositories via public Bitbucket APIs (no Atlassian Guard required)
 - Fetches audit records from Jira Cloud
 - Fetches audit records from Confluence Cloud
 - Supports custom date ranges for event retrieval
@@ -20,7 +21,7 @@ This Go application fetches events from the Atlassian Admin API or the Bitbucket
 
 - Go 1.25 or higher
 - **Admin source**: Atlassian Admin API Token and Organisation ID
-- **Bitbucket source**: Bitbucket username, app password, and workspace slug
+- **Bitbucket source**: Bitbucket username, API token, and workspace slug — **the workspace must have an [Atlassian Guard](https://www.atlassian.com/software/access) subscription** (formerly Atlassian Access); workspaces without it return 404 from the audit log API
 - **Jira source**: Jira site URL, Atlassian account email, and personal API token
 - **Confluence source**: Confluence site URL, Atlassian account email, and personal API token
 
@@ -112,7 +113,7 @@ Run the application with the following command:
 #### Common flags
 
 - `-config`: (Optional) Path to a YAML configuration file
-- `-source`: Log source — `admin` (default), `bitbucket`, `jira`, or `confluence`
+- `-source`: Log source — `admin` (default), `bitbucket`, `bitbucket-commits`, `jira`, or `confluence`
 - `-api_user_agent`: API User Agent (default `"curl/7.54.0"`)
 - `-from`: (Optional) From date in RFC3339 format; overrides saved state
 - `-log-to-file`: (Optional) Enable logging to file
@@ -138,7 +139,7 @@ Run the application with the following command:
 
 - `-workspace`: Bitbucket workspace slug (env: `BITBUCKET_WORKSPACE`)
 - `-bb-username`: Bitbucket username for basic auth (env: `BITBUCKET_USERNAME`)
-- `-bb-app-password`: Bitbucket app password for basic auth (env: `BITBUCKET_APP_PASSWORD`)
+- `-bb-token`: Bitbucket API token for basic auth (env: `BITBUCKET_TOKEN`)
 
 #### Jira source flags
 
@@ -165,7 +166,7 @@ Run the application with the following command:
 | `ATLASSIAN_ORGID`           | Atlassian Organisation ID (admin source) |
 | `BITBUCKET_WORKSPACE`       | Bitbucket workspace slug                 |
 | `BITBUCKET_USERNAME`        | Bitbucket username                       |
-| `BITBUCKET_APP_PASSWORD`    | Bitbucket app password                   |
+| `BITBUCKET_TOKEN`           | Bitbucket API token                      |
 | `JIRA_URL`                  | Jira site URL (jira source)              |
 | `JIRA_EMAIL`                | Jira account email (preferred override)  |
 | `JIRA_TOKEN`                | Jira personal API token (preferred override) |
@@ -183,7 +184,7 @@ Run the application with the following command:
 | Source | Auth used by exporter | Audit access needed | Extra lookup access used for name enrichment | Account / role requirement |
 |--------|------------------------|---------------------|----------------------------------------------|----------------------------|
 | `admin` | Bearer token from Atlassian Admin API key | `read:events:admin` | `GET /users/{account_id}/manage/profile` is also called to resolve display names. Atlassian does not publish an OAuth2 scope for this endpoint; their docs state OAuth2 apps cannot access it directly. | **Organisation Admin** in Atlassian Admin. In practice this also requires [Atlassian Guard](https://www.atlassian.com/software/access) because the organisation API key is created in `admin.atlassian.com`. |
-| `bitbucket` | Bitbucket username + app password | App password permission: `Workspace -> Audit logs: Read` | None | Access to the target Bitbucket workspace and an app password with audit-log read permission |
+| `bitbucket` | Bitbucket username + API token | API token scope: `Workspace -> Audit logs: Read` | None | Access to the target Bitbucket workspace, an API token with audit-log read scope, **and an [Atlassian Guard](https://www.atlassian.com/software/access) subscription on the workspace** — the API returns 404 without it |
 | `jira` | Basic Auth: Jira-specific email/token, or shared Atlassian fallback | Audit API scope: `read:audit-log:jira` | Name enrichment calls `GET /rest/api/3/user/bulk/migration` and `GET /rest/api/2/user?accountId=...`. In current user testing against the new `api.atlassian.com/ex/jira/<cloud_id>/...` gateway, the working scope set was `read:jira-user`, `read:user:jira`, and `read:group:jira`. | **Jira Administrator** global permission (`Administer Jira`) on the target site |
 | `confluence` | Basic Auth: Confluence-specific email/token, or shared Atlassian fallback | `read:audit-log:confluence` | Name enrichment calls `GET /wiki/rest/api/user?accountId=...` and `GET /wiki/rest/api/group/by-id?id=...`. Classic scope: `read:confluence-user`. Granular scopes: `read:user:confluence`, `read:group:confluence`. | **Confluence Administrator** or **System Administrator** global permission on the target site |
 
@@ -285,7 +286,7 @@ CLI flags override anything set in the file:
 
 | Key               | CLI flag             | Environment variable        | Description |
 |-------------------|----------------------|-----------------------------|-------------|
-| `source`          | `-source`            | —                           | Log source (`admin`, `bitbucket`, `jira`, `confluence`) |
+| `source`          | `-source`            | —                           | Log source (`admin`, `bitbucket`, `bitbucket-commits`, `jira`, `confluence`) |
 | `api_user_agent`  | `-api_user_agent`    | —                           | HTTP User-Agent header |
 | `from`            | `-from`              | —                           | Start date (RFC3339) |
 | `sleep`           | `-sleep`             | —                           | Sleep (ms) between requests |
@@ -297,7 +298,7 @@ CLI flags override anything set in the file:
 | `org_id`          | `-org_id`            | `ATLASSIAN_ORGID`           | Atlassian organisation ID |
 | `workspace`       | `-workspace`         | `BITBUCKET_WORKSPACE`       | Bitbucket workspace slug |
 | `bb_username`     | `-bb-username`       | `BITBUCKET_USERNAME`        | Bitbucket username |
-| `bb_app_password` | `-bb-app-password`   | `BITBUCKET_APP_PASSWORD`    | Bitbucket app password |
+| `bb_token`        | `-bb-token`          | `BITBUCKET_TOKEN`           | Bitbucket API token |
 | `jira_url`        | `-jira-url`          | `JIRA_URL`                  | Jira site URL |
 | `jira_email`      | `-jira-email`        | `JIRA_EMAIL`                | Jira account email |
 | `jira_token`      | `-jira-token`        | `JIRA_TOKEN`                | Jira personal API token |
@@ -336,7 +337,7 @@ ATLASSIAN_ADMIN_API_TOKEN=123 ATLASSIAN_ORGID=123-123-123 ./atlassian_log_export
   -source=bitbucket \
   -workspace=my-workspace \
   -bb-username=my-user \
-  -bb-app-password=my-app-password \
+  -bb-token=my-api-token \
   -from=2023-09-01T00:00:00Z \
   -debug
 ```
@@ -346,9 +347,76 @@ or using environment variables:
 ```sh
 BITBUCKET_WORKSPACE=my-workspace \
 BITBUCKET_USERNAME=my-user \
-BITBUCKET_APP_PASSWORD=my-app-password \
+BITBUCKET_TOKEN=my-api-token \
 ./atlassian_log_exporter -source=bitbucket
 ```
+
+### Bitbucket workspace commits (no Atlassian Guard required)
+
+Fetches all commits pushed to any repository in the workspace since the last run. Uses only the standard Bitbucket Cloud REST API — no Atlassian Guard subscription needed.
+
+Each run:
+1. Lists all repositories updated since the last checkpoint.
+2. For each repository, fetches commits newer than the checkpoint and emits them as events.
+3. Saves the most recent commit timestamp as the new checkpoint.
+
+```sh
+./atlassian_log_exporter \
+  -source=bitbucket-commits \
+  -workspace=my-workspace \
+  -bb-username=my-user \
+  -bb-token=my-api-token \
+  -from=2023-09-01T00:00:00Z \
+  -debug
+```
+
+or using environment variables:
+
+```sh
+BITBUCKET_WORKSPACE=my-workspace \
+BITBUCKET_USERNAME=my-user \
+BITBUCKET_TOKEN=my-api-token \
+./atlassian_log_exporter -source=bitbucket-commits
+```
+
+For each updated repository the source fetches two types of events:
+
+**Commits** (`_action: commit`) — one event per commit pushed since the last checkpoint.
+
+| Field | Description |
+|---|---|
+| `_repo` | Repository slug |
+| `_commit_hash` | Full commit SHA |
+| `_commit_date` | Commit timestamp |
+| `_author_name` | Committer display name |
+| `_author_account` | Committer Atlassian account ID |
+| `_author_uuid` | Committer UUID |
+| `_author_raw` | Raw author string from Git |
+| `_message` | First line of the commit message |
+| `_action` | `commit` |
+| `_source` | `bitbucket-commits` |
+
+**PR activity** — one event per PR state change, comment, or approval since the last checkpoint.
+
+| `_action` value | Meaning |
+|---|---|
+| `pr_updated` | PR opened, edited, or otherwise updated |
+| `pr_merged` | PR merged |
+| `pr_declined` | PR declined |
+| `pr_superseded` | PR superseded by another |
+| `pr_comment` | Comment posted on a PR |
+| `pr_approved` | PR approved by a reviewer |
+
+All PR activity events also carry: `_pr_id`, `_pr_title`, `_pr_src` (source branch), `_pr_dest` (destination branch), `_author_name`, `_author_account`, `_author_uuid`. Comments additionally include `_comment_id` and `_content`. State changes include `_pr_state` and optionally `_reason`.
+
+> **Note — Atlassian Guard required**
+>
+> The Bitbucket workspace audit log API is only available to workspaces that have an **[Atlassian Guard](https://www.atlassian.com/software/access) subscription** (formerly Atlassian Access). Workspaces without it return HTTP 404 and the exporter exits with a fatal error. A free UI-only audit log exists in Workspace Settings → Security → Audit Log, but it is not accessible via the API.
+>
+> References:
+> - [Bitbucket Cloud audit log in Atlassian Guard](https://support.atlassian.com/bitbucket-cloud/kb/bitbucket-cloud-audit-log-in-atlassian-guard/)
+> - [Features available with an Atlassian Guard subscription](https://support.atlassian.com/bitbucket-cloud/kb/what-are-the-features-applicable-to-bitbucket-cloud-with-atlassian-guard-subscription/)
+> - [Request audit log data for a workspace](https://support.atlassian.com/bitbucket-cloud/kb/request-audit-log-data-for-a-workspace/)
 
 ### Jira Cloud audit records
 
@@ -400,6 +468,7 @@ The application saves the timestamp of the last processed event so it can resume
 
 - **Admin source**: `atlassian_state.json`
 - **Bitbucket source**: `bitbucket_state.json`
+- **Bitbucket commits source**: `bitbucket_commits_state.json`
 - **Jira source**: `jira_state.json`
 - **Confluence source**: `confluence_state.json`
 

@@ -30,6 +30,14 @@ type SavedState struct {
 	LastEventDate time.Time `json:"last_event_date"`
 }
 
+// BBCommitsState is the persisted checkpoint for the bitbucket-commits source.
+// BranchTips stores the last-seen commit hash per branch per repo and is used
+// to detect pushes, branch creations, and branch deletions between runs.
+type BBCommitsState struct {
+	LastEventDate time.Time                    `json:"last_event_date"`
+	BranchTips    map[string]map[string]string `json:"branch_tips"`
+}
+
 type Config struct {
 	APIUserAgent     string
 	APIToken         string
@@ -43,7 +51,7 @@ type Config struct {
 	Source           string
 	BBWorkspace      string
 	BBUsername       string
-	BBAppPassword    string
+	BBToken          string
 	JiraURL          string
 	JiraEmail        string
 	JiraToken        string
@@ -78,7 +86,7 @@ type YAMLConfig struct {
 	Source           string `yaml:"source"`
 	BBWorkspace      string `yaml:"workspace"`
 	BBUsername       string `yaml:"bb_username"`
-	BBAppPassword    string `yaml:"bb_app_password"`
+	BBToken          string `yaml:"bb_token"`
 	JiraURL          string `yaml:"jira_url"`
 	JiraEmail        string `yaml:"jira_email"`
 	JiraToken        string `yaml:"jira_token"`
@@ -147,8 +155,8 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.BBUsername != "" {
 		base.BBUsername = override.BBUsername
 	}
-	if override.BBAppPassword != "" {
-		base.BBAppPassword = override.BBAppPassword
+	if override.BBToken != "" {
+		base.BBToken = override.BBToken
 	}
 	if override.JiraURL != "" {
 		base.JiraURL = override.JiraURL
@@ -280,6 +288,114 @@ type BitbucketAuditPage struct {
 	Next    string                `json:"next"`
 }
 
+// BBRepository represents a Bitbucket Cloud repository.
+type BBRepository struct {
+	Slug      string `json:"slug"`
+	FullName  string `json:"full_name"`
+	CreatedOn string `json:"created_on"`
+	UpdatedOn string `json:"updated_on"`
+	IsPrivate bool   `json:"is_private"`
+}
+
+type BBRepositoryPage struct {
+	Values []BBRepository `json:"values"`
+	Next   string         `json:"next"`
+}
+
+// BBCommitAuthor represents the author of a Bitbucket commit.
+type BBCommitAuthor struct {
+	Raw  string `json:"raw"`
+	User struct {
+		DisplayName string `json:"display_name"`
+		AccountID   string `json:"account_id"`
+		UUID        string `json:"uuid"`
+	} `json:"user"`
+}
+
+// BBCommit represents a single Bitbucket commit.
+type BBCommit struct {
+	Hash    string         `json:"hash"`
+	Date    string         `json:"date"`
+	Message string         `json:"message"`
+	Author  BBCommitAuthor `json:"author"`
+}
+
+type BBCommitPage struct {
+	Values []BBCommit `json:"values"`
+	Next   string     `json:"next"`
+}
+
+// BBBranch represents a Bitbucket branch reference with its tip commit.
+type BBBranch struct {
+	Name   string `json:"name"`
+	Target struct {
+		Hash string `json:"hash"`
+		Date string `json:"date"`
+	} `json:"target"`
+}
+
+type BBBranchPage struct {
+	Values []BBBranch `json:"values"`
+	Next   string     `json:"next"`
+}
+
+// BBPRUser is a Bitbucket user reference used across PR activity types.
+type BBPRUser struct {
+	DisplayName string `json:"display_name"`
+	AccountID   string `json:"account_id"`
+	UUID        string `json:"uuid"`
+}
+
+// BBPREndpoint holds the branch name for a PR source or destination.
+type BBPREndpoint struct {
+	Branch struct {
+		Name string `json:"name"`
+	} `json:"branch"`
+}
+
+// BBPRSummary is the PR metadata embedded in every activity item.
+type BBPRSummary struct {
+	ID          int          `json:"id"`
+	Title       string       `json:"title"`
+	Source      BBPREndpoint `json:"source"`
+	Destination BBPREndpoint `json:"destination"`
+}
+
+type BBPRComment struct {
+	ID        int    `json:"id"`
+	CreatedOn string `json:"created_on"`
+	Content   struct {
+		Raw string `json:"raw"`
+	} `json:"content"`
+	Author BBPRUser `json:"author"`
+}
+
+type BBPRUpdate struct {
+	State  string   `json:"state"`
+	Date   string   `json:"date"`
+	Author BBPRUser `json:"author"`
+	Reason string   `json:"reason"`
+}
+
+type BBPRApproval struct {
+	Date string   `json:"date"`
+	User BBPRUser `json:"user"`
+}
+
+// BBPRActivity is one item from the pullrequests/activity endpoint.
+// Exactly one of Comment, Update, or Approval is non-nil per item.
+type BBPRActivity struct {
+	PullRequest BBPRSummary   `json:"pull_request"`
+	Comment     *BBPRComment  `json:"comment,omitempty"`
+	Update      *BBPRUpdate   `json:"update,omitempty"`
+	Approval    *BBPRApproval `json:"approval,omitempty"`
+}
+
+type BBPRActivityPage struct {
+	Values []BBPRActivity `json:"values"`
+	Next   string         `json:"next"`
+}
+
 // ConfluenceAuditAuthor represents the author in a Confluence audit record.
 type ConfluenceAuditAuthor struct {
 	Type        string `json:"type"`
@@ -353,6 +469,29 @@ func loadState(filename string) (SavedState, error) {
 		return state, err
 	}
 	return state, json.Unmarshal(jsonData, &state)
+}
+
+func saveBBCommitsState(state BBCommitsState, filename string) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, data, 0644)
+}
+
+func loadBBCommitsState(filename string) (BBCommitsState, error) {
+	var state BBCommitsState
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return state, err
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, err
+	}
+	if state.BranchTips == nil {
+		state.BranchTips = make(map[string]map[string]string)
+	}
+	return state, nil
 }
 
 func initLogger(debug bool, logToFile bool, logFilePath string) *zap.SugaredLogger {
@@ -539,7 +678,7 @@ func parseFlags() Config {
 		Source:          "admin",
 		BBWorkspace:     os.Getenv("BITBUCKET_WORKSPACE"),
 		BBUsername:      os.Getenv("BITBUCKET_USERNAME"),
-		BBAppPassword:   os.Getenv("BITBUCKET_APP_PASSWORD"),
+		BBToken:         os.Getenv("BITBUCKET_TOKEN"),
 		JiraURL:         os.Getenv("JIRA_URL"),
 		JiraEmail:       os.Getenv("JIRA_EMAIL"),
 		JiraToken:       os.Getenv("JIRA_TOKEN"),
@@ -577,7 +716,7 @@ func parseFlags() Config {
 	flag.StringVar(&config.Source, "source", base.Source, "Log source: admin, bitbucket, jira, or confluence")
 	flag.StringVar(&config.BBWorkspace, "workspace", base.BBWorkspace, "Bitbucket workspace slug (bitbucket source)")
 	flag.StringVar(&config.BBUsername, "bb-username", base.BBUsername, "Bitbucket username for basic auth (bitbucket source)")
-	flag.StringVar(&config.BBAppPassword, "bb-app-password", base.BBAppPassword, "Bitbucket app password for basic auth (bitbucket source)")
+	flag.StringVar(&config.BBToken, "bb-token", base.BBToken, "Bitbucket API token for basic auth (bitbucket source)")
 	flag.StringVar(&config.JiraURL, "jira-url", base.JiraURL, "Jira site URL, e.g. https://your-org.atlassian.net (jira source)")
 	flag.StringVar(&config.JiraEmail, "jira-email", base.JiraEmail, "Jira account email for basic auth (env: JIRA_EMAIL; falls back to -atlassian-email)")
 	flag.StringVar(&config.JiraToken, "jira-token", base.JiraToken, "Jira personal API token for basic auth (env: JIRA_TOKEN; falls back to -atlassian-token)")
@@ -633,8 +772,14 @@ func parseFlags() Config {
 			os.Exit(1)
 		}
 	case "bitbucket":
-		if config.BBWorkspace == "" || config.BBUsername == "" || config.BBAppPassword == "" {
-			fmt.Fprintln(os.Stderr, "bitbucket source requires -workspace, -bb-username, and -bb-app-password")
+		if config.BBWorkspace == "" || config.BBUsername == "" || config.BBToken == "" {
+			fmt.Fprintln(os.Stderr, "bitbucket source requires -workspace, -bb-username, and -bb-token")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+	case "bitbucket-commits":
+		if config.BBWorkspace == "" || config.BBUsername == "" || config.BBToken == "" {
+			fmt.Fprintln(os.Stderr, "bitbucket-commits source requires -workspace, -bb-username, and -bb-token")
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
@@ -651,7 +796,7 @@ func parseFlags() Config {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown source %q: must be admin, bitbucket, jira, or confluence\n", config.Source)
+		fmt.Fprintf(os.Stderr, "unknown source %q: must be admin, bitbucket, bitbucket-commits, jira, or confluence\n", config.Source)
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -1126,7 +1271,7 @@ func initBitbucketClient(config Config, log *zap.SugaredLogger) (*bitbucket.Clie
 	if err != nil {
 		return nil, err
 	}
-	bbClient.Auth.SetBasicAuth(config.BBUsername, config.BBAppPassword)
+	bbClient.Auth.SetBasicAuth(config.BBUsername, config.BBToken)
 	bbClient.Auth.SetUserAgent(config.APIUserAgent)
 	return bbClient, nil
 }
@@ -1336,6 +1481,482 @@ func runBitbucketSource(ctx context.Context, config Config, log *zap.SugaredLogg
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
+		log.Errorf("Error saving state: %v", err)
+	}
+}
+
+func fetchBBRepositories(ctx context.Context, bbClient *bitbucket.Client, config Config, startTime time.Time, log *zap.SugaredLogger) ([]BBRepository, error) {
+	var repos []BBRepository
+	q := fmt.Sprintf(`updated_on > "%s"`, startTime.UTC().Format(time.RFC3339))
+	endpoint := fmt.Sprintf("2.0/repositories/%s?q=%s&pagelen=100",
+		url.PathEscape(config.BBWorkspace),
+		url.QueryEscape(q),
+	)
+
+	for {
+		request, err := bbClient.NewRequest(ctx, http.MethodGet, endpoint, "", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var page BBRepositoryPage
+		response, err := bbClient.Call(request, &page)
+		if response != nil {
+			log.Debugf("Response HTTP Code: %d", response.Code)
+		}
+		if err != nil {
+			if response != nil && response.Code == 429 {
+				retryAfter := handleBitbucketRateLimit(response, log)
+				time.Sleep(time.Duration(retryAfter) * time.Second)
+				continue
+			}
+			return nil, err
+		}
+
+		repos = append(repos, page.Values...)
+
+		if page.Next == "" {
+			break
+		}
+		endpoint = page.Next
+		time.Sleep(time.Duration(config.Sleep) * time.Millisecond)
+	}
+
+	return repos, nil
+}
+
+func fetchBBCommitsForRepo(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, startTime time.Time, log *zap.SugaredLogger) ([]BBCommit, error) {
+	var commits []BBCommit
+	endpoint := fmt.Sprintf("2.0/repositories/%s/%s/commits?pagelen=100",
+		url.PathEscape(config.BBWorkspace),
+		url.PathEscape(repoSlug),
+	)
+
+	for {
+		request, err := bbClient.NewRequest(ctx, http.MethodGet, endpoint, "", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var page BBCommitPage
+		response, err := bbClient.Call(request, &page)
+		if response != nil {
+			log.Debugf("Response HTTP Code: %d", response.Code)
+		}
+		if err != nil {
+			if response != nil && response.Code == 429 {
+				retryAfter := handleBitbucketRateLimit(response, log)
+				time.Sleep(time.Duration(retryAfter) * time.Second)
+				continue
+			}
+			return nil, err
+		}
+
+		done := false
+		for _, commit := range page.Values {
+			ts, parseErr := parseBBTime(commit.Date)
+			if parseErr != nil || !ts.After(startTime) {
+				done = true
+				break
+			}
+			commits = append(commits, commit)
+		}
+
+		if done || page.Next == "" {
+			break
+		}
+		endpoint = page.Next
+		time.Sleep(time.Duration(config.Sleep) * time.Millisecond)
+	}
+
+	return commits, nil
+}
+
+func processBBCommitEvents(repoSlug string, commits []BBCommit, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) {
+	for _, commit := range commits {
+		firstLine := strings.SplitN(commit.Message, "\n", 2)[0]
+		log.Info(
+			"Repo:", repoSlug,
+			", Commit:", commit.Hash,
+			", Date:", commit.Date,
+			", Author:", commit.Author.User.DisplayName,
+			", Message:", firstLine,
+		)
+
+		ts, err := parseBBTime(commit.Date)
+		if err != nil {
+			ts = time.Now().UTC()
+		}
+
+		extra := map[string]interface{}{
+			"_repo":            repoSlug,
+			"_commit_hash":     commit.Hash,
+			"_commit_date":     commit.Date,
+			"_author_name":     commit.Author.User.DisplayName,
+			"_author_account":  commit.Author.User.AccountID,
+			"_author_uuid":     commit.Author.User.UUID,
+			"_author_raw":      commit.Author.Raw,
+			"_message":         firstLine,
+			"_action":          "commit",
+			"_source":          "bitbucket-commits",
+		}
+		sendGELF(gelfWriter, gelfHost,
+			fmt.Sprintf("bitbucket commit: %s/%s", repoSlug, firstLine),
+			ts,
+			extra,
+			log,
+		)
+		sendFluentBit(fluentBitClient, extra, log)
+	}
+}
+
+// parseBBTime parses a Bitbucket timestamp, which may include sub-second
+// precision (e.g. "2024-01-01T12:00:00.000000+00:00").
+func parseBBTime(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, s)
+}
+
+func bbPRActivityTime(a BBPRActivity) (time.Time, bool) {
+	var raw string
+	switch {
+	case a.Comment != nil:
+		raw = a.Comment.CreatedOn
+	case a.Update != nil:
+		raw = a.Update.Date
+	case a.Approval != nil:
+		raw = a.Approval.Date
+	default:
+		return time.Time{}, false
+	}
+	t, err := parseBBTime(raw)
+	return t, err == nil
+}
+
+func bbPRActivityAction(a BBPRActivity) string {
+	switch {
+	case a.Comment != nil:
+		return "pr_comment"
+	case a.Approval != nil:
+		return "pr_approved"
+	case a.Update != nil:
+		switch strings.ToUpper(a.Update.State) {
+		case "MERGED":
+			return "pr_merged"
+		case "DECLINED":
+			return "pr_declined"
+		case "SUPERSEDED":
+			return "pr_superseded"
+		default:
+			return "pr_updated"
+		}
+	default:
+		return "pr_activity"
+	}
+}
+
+func fetchBBPRActivity(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, startTime time.Time, log *zap.SugaredLogger) ([]BBPRActivity, error) {
+	var activities []BBPRActivity
+	endpoint := fmt.Sprintf("2.0/repositories/%s/%s/pullrequests/activity?pagelen=50",
+		url.PathEscape(config.BBWorkspace),
+		url.PathEscape(repoSlug),
+	)
+
+	for {
+		request, err := bbClient.NewRequest(ctx, http.MethodGet, endpoint, "", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var page BBPRActivityPage
+		response, err := bbClient.Call(request, &page)
+		if response != nil {
+			log.Debugf("Response HTTP Code: %d", response.Code)
+		}
+		if err != nil {
+			if response != nil && response.Code == 429 {
+				retryAfter := handleBitbucketRateLimit(response, log)
+				time.Sleep(time.Duration(retryAfter) * time.Second)
+				continue
+			}
+			// 404 means no PRs exist for this repo; treat as empty
+			if response != nil && response.Code == 404 {
+				return nil, nil
+			}
+			return nil, err
+		}
+
+		done := false
+		for _, activity := range page.Values {
+			ts, ok := bbPRActivityTime(activity)
+			if !ok || !ts.After(startTime) {
+				done = true
+				break
+			}
+			activities = append(activities, activity)
+		}
+
+		if done || page.Next == "" {
+			break
+		}
+		endpoint = page.Next
+		time.Sleep(time.Duration(config.Sleep) * time.Millisecond)
+	}
+
+	return activities, nil
+}
+
+func processBBPRActivityEvents(repoSlug string, activities []BBPRActivity, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) {
+	for _, activity := range activities {
+		action := bbPRActivityAction(activity)
+		ts, _ := bbPRActivityTime(activity)
+		pr := activity.PullRequest
+
+		extra := map[string]interface{}{
+			"_repo":     repoSlug,
+			"_action":   action,
+			"_source":   "bitbucket-commits",
+			"_pr_id":    pr.ID,
+			"_pr_title": pr.Title,
+			"_pr_src":   pr.Source.Branch.Name,
+			"_pr_dest":  pr.Destination.Branch.Name,
+		}
+
+		var authorName, authorAccount, authorUUID string
+		switch {
+		case activity.Comment != nil:
+			authorName = activity.Comment.Author.DisplayName
+			authorAccount = activity.Comment.Author.AccountID
+			authorUUID = activity.Comment.Author.UUID
+			firstLine := strings.SplitN(activity.Comment.Content.Raw, "\n", 2)[0]
+			extra["_comment_id"] = activity.Comment.ID
+			extra["_content"] = firstLine
+		case activity.Update != nil:
+			authorName = activity.Update.Author.DisplayName
+			authorAccount = activity.Update.Author.AccountID
+			authorUUID = activity.Update.Author.UUID
+			extra["_pr_state"] = activity.Update.State
+			if activity.Update.Reason != "" {
+				extra["_reason"] = activity.Update.Reason
+			}
+		case activity.Approval != nil:
+			authorName = activity.Approval.User.DisplayName
+			authorAccount = activity.Approval.User.AccountID
+			authorUUID = activity.Approval.User.UUID
+		}
+		extra["_author_name"] = authorName
+		extra["_author_account"] = authorAccount
+		extra["_author_uuid"] = authorUUID
+
+		log.Info(
+			"Repo:", repoSlug,
+			", PR:", pr.ID,
+			", Action:", action,
+			", Author:", authorName,
+			", Title:", pr.Title,
+		)
+
+		sendGELF(gelfWriter, gelfHost,
+			fmt.Sprintf("bitbucket %s: %s PR#%d %s", action, repoSlug, pr.ID, pr.Title),
+			ts,
+			extra,
+			log,
+		)
+		sendFluentBit(fluentBitClient, extra, log)
+	}
+}
+
+func fetchBBBranches(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, log *zap.SugaredLogger) ([]BBBranch, error) {
+	var branches []BBBranch
+	endpoint := fmt.Sprintf("2.0/repositories/%s/%s/refs/branches?pagelen=100",
+		url.PathEscape(config.BBWorkspace),
+		url.PathEscape(repoSlug),
+	)
+
+	for {
+		request, err := bbClient.NewRequest(ctx, http.MethodGet, endpoint, "", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var page BBBranchPage
+		response, err := bbClient.Call(request, &page)
+		if response != nil {
+			log.Debugf("Response HTTP Code: %d", response.Code)
+		}
+		if err != nil {
+			if response != nil && response.Code == 429 {
+				retryAfter := handleBitbucketRateLimit(response, log)
+				time.Sleep(time.Duration(retryAfter) * time.Second)
+				continue
+			}
+			return nil, err
+		}
+
+		branches = append(branches, page.Values...)
+
+		if page.Next == "" {
+			break
+		}
+		endpoint = page.Next
+		time.Sleep(time.Duration(config.Sleep) * time.Millisecond)
+	}
+
+	return branches, nil
+}
+
+// processBBBranchEvents compares current branch tips to the previously stored
+// tips and emits branch_push, branch_created, and branch_deleted events.
+// Returns the updated tip map to be stored in state.
+// When stored is nil (first time seeing this repo) no events are emitted —
+// we just record the current tips as the baseline.
+func processBBBranchEvents(repoSlug string, stored map[string]string, branches []BBBranch, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) map[string]string {
+	current := make(map[string]string, len(branches))
+	byName := make(map[string]BBBranch, len(branches))
+	for _, b := range branches {
+		current[b.Name] = b.Target.Hash
+		byName[b.Name] = b
+	}
+
+	// First time we see this repo — record baseline, no events.
+	if stored == nil {
+		return current
+	}
+
+	emit := func(action, branch, hash, prevHash string, ts time.Time) {
+		extra := map[string]interface{}{
+			"_repo":    repoSlug,
+			"_action":  action,
+			"_source":  "bitbucket-commits",
+			"_branch":  branch,
+			"_hash":    hash,
+		}
+		if prevHash != "" {
+			extra["_prev_hash"] = prevHash
+		}
+		short := fmt.Sprintf("bitbucket %s: %s/%s", action, repoSlug, branch)
+		log.Info("Repo:", repoSlug, ", Branch:", branch, ", Action:", action, ", Hash:", hash)
+		sendGELF(gelfWriter, gelfHost, short, ts, extra, log)
+		sendFluentBit(fluentBitClient, extra, log)
+	}
+
+	for name, hash := range current {
+		b := byName[name]
+		ts, err := parseBBTime(b.Target.Date)
+		if err != nil {
+			ts = time.Now().UTC()
+		}
+		if oldHash, existed := stored[name]; !existed {
+			emit("branch_created", name, hash, "", ts)
+		} else if oldHash != hash {
+			emit("branch_push", name, hash, oldHash, ts)
+		}
+	}
+
+	for name, hash := range stored {
+		if _, exists := current[name]; !exists {
+			emit("branch_deleted", name, "", hash, time.Now().UTC())
+		}
+	}
+
+	return current
+}
+
+func runBitbucketCommitsSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
+	stateFilename := "bitbucket_commits_state.json"
+	state, err := loadBBCommitsState(stateFilename)
+	if err != nil {
+		log.Errorf("Error loading state: %v. Starting from beginning.", err)
+		state = BBCommitsState{
+			LastEventDate: time.Now().AddDate(0, -1, 0).UTC(),
+			BranchTips:    make(map[string]map[string]string),
+		}
+	}
+	startTime := state.LastEventDate.Add(time.Second)
+
+	if config.From != "" {
+		startTime, err = time.Parse(time.RFC3339, config.From)
+		if err != nil {
+			log.Fatalf("Invalid from date: %v", err)
+		}
+	}
+
+	bbClient, err := initBitbucketClient(config, log)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Infof("Fetching Bitbucket repositories updated since %s", startTime)
+
+	repos, err := fetchBBRepositories(ctx, bbClient, config, startTime, log)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(repos) == 0 {
+		log.Debugf("No Bitbucket repositories updated since %s", startTime)
+		return
+	}
+
+	log.Infof("Found %d updated repositories, fetching commits, branches and PR activity", len(repos))
+
+	var latestSeen time.Time
+
+	updateLatest := func(t time.Time) {
+		if t.After(latestSeen) {
+			latestSeen = t
+		}
+	}
+
+	for _, repo := range repos {
+		// --- commits ---
+		commits, fetchErr := fetchBBCommitsForRepo(ctx, bbClient, config, repo.Slug, startTime, log)
+		if fetchErr != nil {
+			log.Errorf("Error fetching commits for repo %q: %v", repo.Slug, fetchErr)
+		} else if len(commits) == 0 {
+			log.Debugf("No new commits in repo %q", repo.Slug)
+		} else {
+			log.Infof("Found %d new commits in repo %q", len(commits), repo.Slug)
+			processBBCommitEvents(repo.Slug, commits, log, gelfWriter, config.GELFHost, fluentBitClient)
+			// commits are newest-first
+			if ts, tsErr := parseBBTime(commits[0].Date); tsErr == nil {
+				updateLatest(ts)
+			}
+		}
+
+		// --- branch push / create / delete detection ---
+		branches, branchErr := fetchBBBranches(ctx, bbClient, config, repo.Slug, log)
+		if branchErr != nil {
+			log.Errorf("Error fetching branches for repo %q: %v", repo.Slug, branchErr)
+		} else {
+			stored := state.BranchTips[repo.Slug] // nil on first run for this repo
+			updated := processBBBranchEvents(repo.Slug, stored, branches, log, gelfWriter, config.GELFHost, fluentBitClient)
+			state.BranchTips[repo.Slug] = updated
+		}
+
+		// --- PR activity (comments, approvals, opens, merges, declines) ---
+		activities, actErr := fetchBBPRActivity(ctx, bbClient, config, repo.Slug, startTime, log)
+		if actErr != nil {
+			log.Errorf("Error fetching PR activity for repo %q: %v", repo.Slug, actErr)
+		} else if len(activities) == 0 {
+			log.Debugf("No new PR activity in repo %q", repo.Slug)
+		} else {
+			log.Infof("Found %d new PR activity events in repo %q", len(activities), repo.Slug)
+			processBBPRActivityEvents(repo.Slug, activities, log, gelfWriter, config.GELFHost, fluentBitClient)
+			// activities are newest-first
+			if ts, ok := bbPRActivityTime(activities[0]); ok {
+				updateLatest(ts)
+			}
+		}
+	}
+
+	if !latestSeen.IsZero() {
+		state.LastEventDate = latestSeen
+	}
+	log.Debugf("Last event time: %v", state.LastEventDate)
+	if err = saveBBCommitsState(state, stateFilename); err != nil {
 		log.Errorf("Error saving state: %v", err)
 	}
 }
@@ -1910,6 +2531,8 @@ func main() {
 		runAdminSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "bitbucket":
 		runBitbucketSource(ctx, config, log, gelfWriter, fluentBitClient)
+	case "bitbucket-commits":
+		runBitbucketCommitsSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "jira":
 		runJiraSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "confluence":

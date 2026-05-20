@@ -977,7 +977,7 @@ sleep: 500
 source: bitbucket
 workspace: my-workspace
 bb_username: bbuser
-bb_app_password: bbpassword
+bb_token: bbpassword
 jira_url: https://jira.example.com
 jira_email: jira-user@example.com
 jira_token: jira-secret
@@ -1018,7 +1018,7 @@ fluentbit_tag: atlassian
 		{"Source", cfg.Source, "bitbucket"},
 		{"BBWorkspace", cfg.BBWorkspace, "my-workspace"},
 		{"BBUsername", cfg.BBUsername, "bbuser"},
-		{"BBAppPassword", cfg.BBAppPassword, "bbpassword"},
+		{"BBToken", cfg.BBToken, "bbpassword"},
 		{"JiraURL", cfg.JiraURL, "https://jira.example.com"},
 		{"JiraEmail", cfg.JiraEmail, "jira-user@example.com"},
 		{"JiraToken", cfg.JiraToken, "jira-secret"},
