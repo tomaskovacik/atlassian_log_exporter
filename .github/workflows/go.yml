@@ -30,6 +30,6 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -o "atlassian_log_exporter-${{ steps.version.outputs.VERSION }}" .
 
       - name: Create GitHub release and upload binary
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: "atlassian_log_exporter-${{ steps.version.outputs.VERSION }}"
