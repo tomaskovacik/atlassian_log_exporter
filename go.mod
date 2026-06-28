@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/ctreminiom/go-atlassian/v2 v2.12.0
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.28.0
 	gopkg.in/Graylog2/go-gelf.v2 v2.0.0-20191017102106-1550ee647df0
 	gopkg.in/yaml.v3 v3.0.1
 )
