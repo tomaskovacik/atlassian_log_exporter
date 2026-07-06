@@ -39,7 +39,7 @@ services:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
     command: ["-config", "/config.yaml", "-source=jira"]
     environment:
-      JIRA_URL: ${JIRA_URL}
+      JIRA_URL: ${JIRA_URL:-}
       JIRA_EMAIL: ${JIRA_EMAIL:-}
       JIRA_TOKEN: ${JIRA_TOKEN:-}
       ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL:-}
@@ -53,7 +53,7 @@ services:
     image: ghcr.io/tomaskovacik/atlassian_log_exporter:latest
     command: ["-config", "/config.yaml", "-source=confluence"]
     environment:
-      CONFLUENCE_URL: ${CONFLUENCE_URL}
+      CONFLUENCE_URL: ${CONFLUENCE_URL:-}
       CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:-}
       CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
       ATLASSIAN_EMAIL: ${ATLASSIAN_EMAIL:-}
