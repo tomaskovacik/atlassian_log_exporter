@@ -1004,6 +1004,12 @@ fluentbit_tag: atlassian
 		t.Fatalf("loadYAMLConfig: %v", err)
 	}
 
+	assertYAMLConfigAllFieldsStringFields(t, cfg)
+	assertYAMLConfigAllFieldsPointerAndIntFields(t, cfg)
+}
+
+func assertYAMLConfigAllFieldsStringFields(t *testing.T, cfg YAMLConfig) {
+	t.Helper()
 	checks := []struct {
 		name string
 		got  string
@@ -1037,6 +1043,10 @@ fluentbit_tag: atlassian
 			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
 		}
 	}
+}
+
+func assertYAMLConfigAllFieldsPointerAndIntFields(t *testing.T, cfg YAMLConfig) {
+	t.Helper()
 	if cfg.LogToFile == nil || !*cfg.LogToFile {
 		t.Error("LogToFile: got nil or false, want true")
 	}

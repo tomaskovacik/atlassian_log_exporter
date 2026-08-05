@@ -26,6 +26,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// sourceBitbucketCommits identifies the bitbucket-commits export source.
+const sourceBitbucketCommits = "bitbucket-commits"
+
 type SavedState struct {
 	LastEventDate time.Time `json:"last_event_date"`
 }
@@ -119,6 +122,14 @@ func loadYAMLConfig(path string) (YAMLConfig, error) {
 // the merged result.  String fields are merged when non-empty; int fields when
 // non-zero; bool pointer fields when non-nil.
 func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
+	base = mergeYAMLGeneralConfig(base, override)
+	base = mergeYAMLSourceCredentials(base, override)
+	base = mergeYAMLGELFConfig(base, override)
+	base = mergeYAMLFluentBitConfig(base, override)
+	return base
+}
+
+func mergeYAMLGeneralConfig(base, override YAMLConfig) YAMLConfig {
 	if override.APIUserAgent != "" {
 		base.APIUserAgent = override.APIUserAgent
 	}
@@ -149,6 +160,10 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.Source != "" {
 		base.Source = override.Source
 	}
+	return base
+}
+
+func mergeYAMLSourceCredentials(base, override YAMLConfig) YAMLConfig {
 	if override.BBWorkspace != "" {
 		base.BBWorkspace = override.BBWorkspace
 	}
@@ -182,6 +197,10 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.AtlassianToken != "" {
 		base.AtlassianToken = override.AtlassianToken
 	}
+	return base
+}
+
+func mergeYAMLGELFConfig(base, override YAMLConfig) YAMLConfig {
 	if override.GELFEnabled != nil {
 		base.GELFEnabled = override.GELFEnabled
 	}
@@ -194,6 +213,10 @@ func mergeYAMLConfig(base, override YAMLConfig) YAMLConfig {
 	if override.GELFProtocol != "" {
 		base.GELFProtocol = override.GELFProtocol
 	}
+	return base
+}
+
+func mergeYAMLFluentBitConfig(base, override YAMLConfig) YAMLConfig {
 	if override.FluentBitEnabled != nil {
 		base.FluentBitEnabled = override.FluentBitEnabled
 	}
@@ -651,25 +674,26 @@ func sendFluentBit(client *FluentBitClient, data map[string]interface{}, log *za
 	}
 }
 
-func parseFlags() Config {
-	// Pre-scan os.Args for -config / --config so we can load the YAML file
-	// before registering flag defaults. We do not call flag.Parse() yet.
-	configFile := ""
-	for i, arg := range os.Args[1:] {
+// extractConfigFileArg pre-scans args for -config / --config so the YAML file
+// can be loaded before flag defaults are registered. It does not call
+// flag.Parse().
+func extractConfigFileArg(args []string) string {
+	for i, arg := range args {
 		trimmed := strings.TrimLeft(arg, "-")
-		if trimmed == "config" && i+1 < len(os.Args)-1 {
-			configFile = os.Args[i+2]
-			break
+		if trimmed == "config" && i+1 < len(args) {
+			return args[i+1]
 		}
 		if strings.HasPrefix(trimmed, "config=") {
-			configFile = strings.SplitN(trimmed, "=", 2)[1]
-			break
+			return strings.SplitN(trimmed, "=", 2)[1]
 		}
 	}
+	return ""
+}
 
-	// Start with env-var defaults, then overlay values from the YAML config
-	// file so that explicit CLI flags can still override everything.
-	base := YAMLConfig{
+// buildYAMLConfigDefaults returns the env-var-derived defaults that YAML
+// config file and CLI flag values are layered on top of.
+func buildYAMLConfigDefaults() YAMLConfig {
+	return YAMLConfig{
 		APIUserAgent:    "curl/7.54.0",
 		APIToken:        os.Getenv("ATLASSIAN_ADMIN_API_TOKEN"),
 		OrgID:           os.Getenv("ATLASSIAN_ORGID"),
@@ -692,18 +716,26 @@ func parseFlags() Config {
 		FluentBitHost:   os.Getenv("FLUENTBIT_HOST"),
 		FluentBitTag:    os.Getenv("FLUENTBIT_TAG"),
 	}.withLegacyCredentialFallbacks()
+}
 
-	if configFile != "" {
-		fileCfg, err := loadYAMLConfig(configFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading config file %s: %v\n", configFile, err)
-			os.Exit(1)
-		}
-		// Overlay non-zero file values on top of env-var defaults.
-		base = mergeYAMLConfig(base, fileCfg.withLegacyCredentialFallbacks())
+// loadYAMLBaseConfig builds the env-var defaults and, if configFile is set,
+// overlays non-zero values loaded from that YAML file on top of them.
+func loadYAMLBaseConfig(configFile string) YAMLConfig {
+	base := buildYAMLConfigDefaults()
+	if configFile == "" {
+		return base
 	}
+	fileCfg, err := loadYAMLConfig(configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config file %s: %v\n", configFile, err)
+		os.Exit(1)
+	}
+	return mergeYAMLConfig(base, fileCfg.withLegacyCredentialFallbacks())
+}
 
-	config := Config{}
+// registerConfigFlags registers all CLI flags for config, using base as the
+// default value for each.
+func registerConfigFlags(config *Config, base YAMLConfig) {
 	flag.StringVar(&config.APIUserAgent, "api_user_agent", base.APIUserAgent, "API User Agent")
 	flag.StringVar(&config.APIToken, "api_token", base.APIToken, "Atlassian Admin API Token (admin source)")
 	flag.StringVar(&config.From, "from", base.From, "(Optional) From date (RFC3339)")
@@ -734,6 +766,73 @@ func parseFlags() Config {
 	flag.IntVar(&config.FluentBitPort, "fluentbit-port", base.FluentBitPort, "Fluent Bit HTTP input port (default 9880)")
 	flag.StringVar(&config.FluentBitTag, "fluentbit-tag", base.FluentBitTag, "Fluent Bit tag / URL path (env: FLUENTBIT_TAG; default: source name)")
 	flag.String("config", "", "(Optional) Path to YAML configuration file")
+}
+
+// applyOutputDefaults fills in output port defaults that cannot be expressed
+// as flag defaults (zero-value ints).
+func applyOutputDefaults(config *Config) {
+	if config.GELFPort == 0 {
+		config.GELFPort = 12201
+	}
+	if config.FluentBitPort == 0 {
+		config.FluentBitPort = 9880
+	}
+}
+
+// validateOutputConfig exits the process if an enabled output is missing its
+// required host.
+func validateOutputConfig(config Config) {
+	if config.GELFEnabled && config.GELFHost == "" {
+		fmt.Fprintln(os.Stderr, "gelf-enabled requires -gelf-host")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+	if config.FluentBitEnabled && config.FluentBitHost == "" {
+		fmt.Fprintln(os.Stderr, "fluentbit-enabled requires -fluentbit-host")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+}
+
+// validateSourceConfig exits the process if config.Source is unknown or is
+// missing the credentials it requires.
+func validateSourceConfig(config Config) {
+	var ok bool
+	var requirement string
+	switch config.Source {
+	case "admin":
+		ok = config.APIToken != "" && config.OrgID != ""
+		requirement = "admin source requires -api_token and -org_id"
+	case "bitbucket":
+		ok = config.BBWorkspace != "" && config.BBUsername != "" && config.BBToken != ""
+		requirement = "bitbucket source requires -workspace, -bb-username, and -bb-token"
+	case sourceBitbucketCommits:
+		ok = config.BBWorkspace != "" && config.BBUsername != "" && config.BBToken != ""
+		requirement = "bitbucket-commits source requires -workspace, -bb-username, and -bb-token"
+	case "jira":
+		ok = config.JiraURL != "" && config.JiraEmail != "" && config.JiraToken != ""
+		requirement = "jira source requires -jira-url plus either -jira-email/-jira-token or shared -atlassian-email/-atlassian-token"
+	case "confluence":
+		ok = config.ConfluenceURL != "" && config.ConfluenceEmail != "" && config.ConfluenceToken != ""
+		requirement = "confluence source requires -confluence-url plus either -confluence-email/-confluence-token or shared -atlassian-email/-atlassian-token"
+	default:
+		fmt.Fprintf(os.Stderr, "unknown source %q: must be admin, bitbucket, bitbucket-commits, jira, or confluence\n", config.Source)
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+	if !ok {
+		fmt.Fprintln(os.Stderr, requirement)
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+}
+
+func parseFlags() Config {
+	configFile := extractConfigFileArg(os.Args[1:])
+	base := loadYAMLBaseConfig(configFile)
+
+	config := Config{}
+	registerConfigFlags(&config, base)
 
 	flag.Parse()
 	explicitFlags := make(map[string]bool)
@@ -742,64 +841,9 @@ func parseFlags() Config {
 	})
 	config.applySharedCredentialFlagFallbacks(explicitFlags)
 
-	// Apply GELF port default that cannot be set via a flag default (zero-value int).
-	if config.GELFPort == 0 {
-		config.GELFPort = 12201
-	}
-
-	if config.GELFEnabled && config.GELFHost == "" {
-		fmt.Fprintln(os.Stderr, "gelf-enabled requires -gelf-host")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	// Apply Fluent Bit port default.
-	if config.FluentBitPort == 0 {
-		config.FluentBitPort = 9880
-	}
-
-	if config.FluentBitEnabled && config.FluentBitHost == "" {
-		fmt.Fprintln(os.Stderr, "fluentbit-enabled requires -fluentbit-host")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	switch config.Source {
-	case "admin":
-		if config.APIToken == "" || config.OrgID == "" {
-			fmt.Fprintln(os.Stderr, "admin source requires -api_token and -org_id")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	case "bitbucket":
-		if config.BBWorkspace == "" || config.BBUsername == "" || config.BBToken == "" {
-			fmt.Fprintln(os.Stderr, "bitbucket source requires -workspace, -bb-username, and -bb-token")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	case "bitbucket-commits":
-		if config.BBWorkspace == "" || config.BBUsername == "" || config.BBToken == "" {
-			fmt.Fprintln(os.Stderr, "bitbucket-commits source requires -workspace, -bb-username, and -bb-token")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	case "jira":
-		if config.JiraURL == "" || config.JiraEmail == "" || config.JiraToken == "" {
-			fmt.Fprintln(os.Stderr, "jira source requires -jira-url plus either -jira-email/-jira-token or shared -atlassian-email/-atlassian-token")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	case "confluence":
-		if config.ConfluenceURL == "" || config.ConfluenceEmail == "" || config.ConfluenceToken == "" {
-			fmt.Fprintln(os.Stderr, "confluence source requires -confluence-url plus either -confluence-email/-confluence-token or shared -atlassian-email/-atlassian-token")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "unknown source %q: must be admin, bitbucket, bitbucket-commits, jira, or confluence\n", config.Source)
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
+	applyOutputDefaults(&config)
+	validateOutputConfig(config)
+	validateSourceConfig(config)
 
 	return config
 }
@@ -1134,31 +1178,12 @@ func fetchEvents(ctx context.Context, cloudAdmin *admin.Client, config Config, s
 		}
 
 		if err != nil {
-			if response != nil {
-				log.Debugf("Response HTTP Code: %d", response.Code)
-				log.Debugf("Response Headers: %v", response.Header)
-
-				// Try to read response body for error details
-				if response.Body != nil {
-					bodyBytes, bodyErr := io.ReadAll(response.Body)
-					if bodyErr != nil {
-						log.Debugf("Error reading response body: %v", bodyErr)
-					} else {
-						log.Debugf("Response Body: %s", string(bodyBytes))
-					}
-				}
-
-				if response.Code == 429 {
-					retryAfter := handleRateLimitExceeded(response, log)
-					time.Sleep(time.Duration(retryAfter) * time.Second)
-					continue
-				}
+			retry, retryAfter, resultErr := classifyEventsFetchError(response, err, log)
+			if retry {
+				time.Sleep(time.Duration(retryAfter) * time.Second)
+				continue
 			}
-			// Log the full error details
-			log.Debugf("Full error details: %+v", err)
-			log.Debugf("Error type: %T", err)
-			log.Debugf("Error string: %s", err.Error())
-			return nil, err
+			return nil, resultErr
 		}
 
 		log.Debugf("Response HTTP Code: %d", response.Code)
@@ -1181,6 +1206,39 @@ func fetchEvents(ctx context.Context, cloudAdmin *admin.Client, config Config, s
 	return eventChunks, nil
 }
 
+// classifyEventsFetchError logs diagnostic details for a failed Events call
+// and determines whether the caller should retry after a rate limit or give
+// up and return the error.
+func classifyEventsFetchError(response *models.ResponseScheme, err error, log *zap.SugaredLogger) (retry bool, retryAfterSeconds int, resultErr error) {
+	if response != nil {
+		log.Debugf("Response HTTP Code: %d", response.Code)
+		log.Debugf("Response Headers: %v", response.Header)
+		logResponseBody(response, log)
+
+		if response.Code == 429 {
+			return true, handleRateLimitExceeded(response, log), nil
+		}
+	}
+	// Log the full error details
+	log.Debugf("Full error details: %+v", err)
+	log.Debugf("Error type: %T", err)
+	log.Debugf("Error string: %s", err.Error())
+	return false, 0, err
+}
+
+// logResponseBody reads and debug-logs the response body, if present.
+func logResponseBody(response *models.ResponseScheme, log *zap.SugaredLogger) {
+	if response.Body == nil {
+		return
+	}
+	bodyBytes, bodyErr := io.ReadAll(response.Body)
+	if bodyErr != nil {
+		log.Debugf("Error reading response body: %v", bodyErr)
+		return
+	}
+	log.Debugf("Response Body: %s", string(bodyBytes))
+}
+
 func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLogger) int {
 	log.Infof("Rate limit exceeded. Retry-After: %s", response.Header.Get("X-Retry-After"))
 	retryAfter := 50
@@ -1199,64 +1257,68 @@ func handleRateLimitExceeded(response *models.ResponseScheme, log *zap.SugaredLo
 func processEvents(eventChunks []*models.OrganizationEventPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, chunk := range eventChunks {
 		for _, event := range chunk.Data {
-			var locationIP string
-			if event.Attributes.Location != nil {
-				locationIP = event.Attributes.Location.IP
-			}
-
-			var actorLink string
-			if event.Attributes.Actor != nil && event.Attributes.Actor.Links != nil {
-				actorLink = event.Attributes.Actor.Links.Self
-			}
-
-			var eventLink string
-			if event.Links != nil {
-				eventLink = event.Links.Self
-			}
-
-			var actorDisplayName string
-			if resolver != nil {
-				actorDisplayName = resolver.resolve(event.Attributes.Actor.ID)
-			}
-
-			log.Debugf("Event: %v", event.Attributes.Container)
-			log.Info(
-				"Event ID:", event.ID,
-				", Event Time:", event.Attributes.Time,
-				", Event Actor ID:", event.Attributes.Actor.ID,
-				", Event Actor Name:", event.Attributes.Actor.Name,
-				", Event Actor Display Name:", actorDisplayName,
-				", Event Actor Link:", actorLink,
-				", Event Action:", event.Attributes.Action,
-				", Event Target:", locationIP,
-				", Event Link:", eventLink,
-			)
-
-			ts, err := time.Parse(time.RFC3339, event.Attributes.Time)
-			if err != nil {
-				ts = time.Now().UTC()
-			}
-			extra := map[string]interface{}{
-				"_event_id":           event.ID,
-				"_event_time":         event.Attributes.Time,
-				"_actor_id":           event.Attributes.Actor.ID,
-				"_actor_name":         event.Attributes.Actor.Name,
-				"_actor_display_name": actorDisplayName,
-				"_actor_link":         actorLink,
-				"_action":             event.Attributes.Action,
-				"_location_ip":        locationIP,
-				"_event_link":         eventLink,
-				"_source":             "admin",
-			}
-			sendGELF(gelfWriter, gelfHost,
-				fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
-				ts,
-				extra,
-				log,
-			)
-			sendFluentBit(fluentBitClient, extra, log)
+			processAdminEvent(event, log, gelfWriter, gelfHost, resolver, fluentBitClient)
 		}
 	}
+}
+
+func processAdminEvent(event *models.OrganizationEventModelScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, fluentBitClient *FluentBitClient) {
+	var locationIP string
+	if event.Attributes.Location != nil {
+		locationIP = event.Attributes.Location.IP
+	}
+
+	var actorLink string
+	if event.Attributes.Actor != nil && event.Attributes.Actor.Links != nil {
+		actorLink = event.Attributes.Actor.Links.Self
+	}
+
+	var eventLink string
+	if event.Links != nil {
+		eventLink = event.Links.Self
+	}
+
+	var actorDisplayName string
+	if resolver != nil {
+		actorDisplayName = resolver.resolve(event.Attributes.Actor.ID)
+	}
+
+	log.Debugf("Event: %v", event.Attributes.Container)
+	log.Info(
+		"Event ID:", event.ID,
+		", Event Time:", event.Attributes.Time,
+		", Event Actor ID:", event.Attributes.Actor.ID,
+		", Event Actor Name:", event.Attributes.Actor.Name,
+		", Event Actor Display Name:", actorDisplayName,
+		", Event Actor Link:", actorLink,
+		", Event Action:", event.Attributes.Action,
+		", Event Target:", locationIP,
+		", Event Link:", eventLink,
+	)
+
+	ts, err := time.Parse(time.RFC3339, event.Attributes.Time)
+	if err != nil {
+		ts = time.Now().UTC()
+	}
+	extra := map[string]interface{}{
+		"_event_id":           event.ID,
+		"_event_time":         event.Attributes.Time,
+		"_actor_id":           event.Attributes.Actor.ID,
+		"_actor_name":         event.Attributes.Actor.Name,
+		"_actor_display_name": actorDisplayName,
+		"_actor_link":         actorLink,
+		"_action":             event.Attributes.Action,
+		"_location_ip":        locationIP,
+		"_event_link":         eventLink,
+		"_source":             "admin",
+	}
+	sendGELF(gelfWriter, gelfHost,
+		fmt.Sprintf("atlassian admin audit: %s", event.Attributes.Action),
+		ts,
+		extra,
+		log,
+	)
+	sendFluentBit(fluentBitClient, extra, log)
 }
 
 func initBitbucketClient(config Config, log *zap.SugaredLogger) (*bitbucket.Client, error) {
@@ -1306,15 +1368,12 @@ func fetchBitbucketEvents(ctx context.Context, bbClient *bitbucket.Client, confi
 		}
 
 		if err != nil {
-			if response != nil && response.Code == 429 {
-				retryAfter := handleBitbucketRateLimit(response, log)
+			retry, retryAfter, resultErr := classifyBitbucketEventsError(response, err, config.BBWorkspace, log)
+			if retry {
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
-			if response != nil && response.Code == 404 {
-				return nil, fmt.Errorf("Bitbucket workspace audit log API returned 404 for workspace %q: this endpoint requires an Atlassian Guard (formerly Atlassian Access) license. Original error: %w", config.BBWorkspace, err)
-			}
-			return nil, err
+			return nil, resultErr
 		}
 
 		pages = append(pages, page)
@@ -1330,6 +1389,19 @@ func fetchBitbucketEvents(ctx context.Context, bbClient *bitbucket.Client, confi
 	}
 
 	return pages, nil
+}
+
+// classifyBitbucketEventsError determines whether a failed workspace-log call
+// should be retried after a rate limit, or returned as a (possibly enriched)
+// error.
+func classifyBitbucketEventsError(response *models.ResponseScheme, err error, workspace string, log *zap.SugaredLogger) (retry bool, retryAfterSeconds int, resultErr error) {
+	if response != nil && response.Code == 429 {
+		return true, handleBitbucketRateLimit(response, log), nil
+	}
+	if response != nil && response.Code == 404 {
+		return false, 0, fmt.Errorf("Bitbucket workspace audit log API returned 404 for workspace %q: this endpoint requires an Atlassian Guard (formerly Atlassian Access) license. Original error: %w", workspace, err)
+	}
+	return false, 0, err
 }
 
 func handleBitbucketRateLimit(response *models.ResponseScheme, log *zap.SugaredLogger) int {
@@ -1544,23 +1616,15 @@ func fetchBBCommitsForRepo(ctx context.Context, bbClient *bitbucket.Client, conf
 			log.Debugf("Response HTTP Code: %d", response.Code)
 		}
 		if err != nil {
-			if response != nil && response.Code == 429 {
-				retryAfter := handleBitbucketRateLimit(response, log)
+			if retry, retryAfter := classifyBBRetryableError(response, log); retry {
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
 			return nil, err
 		}
 
-		done := false
-		for _, commit := range page.Values {
-			ts, parseErr := parseBBTime(commit.Date)
-			if parseErr != nil || !ts.After(startTime) {
-				done = true
-				break
-			}
-			commits = append(commits, commit)
-		}
+		pageCommits, done := collectBBCommitsUntil(page.Values, startTime)
+		commits = append(commits, pageCommits...)
 
 		if done || page.Next == "" {
 			break
@@ -1570,6 +1634,29 @@ func fetchBBCommitsForRepo(ctx context.Context, bbClient *bitbucket.Client, conf
 	}
 
 	return commits, nil
+}
+
+// classifyBBRetryableError reports whether a failed Bitbucket API call was
+// rate-limited and, if so, how long to wait before retrying.
+func classifyBBRetryableError(response *models.ResponseScheme, log *zap.SugaredLogger) (retry bool, retryAfterSeconds int) {
+	if response != nil && response.Code == 429 {
+		return true, handleBitbucketRateLimit(response, log)
+	}
+	return false, 0
+}
+
+// collectBBCommitsUntil appends commits newer than startTime. Commits are
+// returned newest-first, so it stops (done=true) at the first commit that is
+// at or before startTime, or whose date fails to parse.
+func collectBBCommitsUntil(values []BBCommit, startTime time.Time) (commits []BBCommit, done bool) {
+	for _, commit := range values {
+		ts, parseErr := parseBBTime(commit.Date)
+		if parseErr != nil || !ts.After(startTime) {
+			return commits, true
+		}
+		commits = append(commits, commit)
+	}
+	return commits, false
 }
 
 func processBBCommitEvents(repoSlug string, commits []BBCommit, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) {
@@ -1589,16 +1676,16 @@ func processBBCommitEvents(repoSlug string, commits []BBCommit, log *zap.Sugared
 		}
 
 		extra := map[string]interface{}{
-			"_repo":            repoSlug,
-			"_commit_hash":     commit.Hash,
-			"_commit_date":     commit.Date,
-			"_author_name":     commit.Author.User.DisplayName,
-			"_author_account":  commit.Author.User.AccountID,
-			"_author_uuid":     commit.Author.User.UUID,
-			"_author_raw":      commit.Author.Raw,
-			"_message":         firstLine,
-			"_action":          "commit",
-			"_source":          "bitbucket-commits",
+			"_repo":           repoSlug,
+			"_commit_hash":    commit.Hash,
+			"_commit_date":    commit.Date,
+			"_author_name":    commit.Author.User.DisplayName,
+			"_author_account": commit.Author.User.AccountID,
+			"_author_uuid":    commit.Author.User.UUID,
+			"_author_raw":     commit.Author.Raw,
+			"_message":        firstLine,
+			"_action":         "commit",
+			"_source":         sourceBitbucketCommits,
 		}
 		sendGELF(gelfWriter, gelfHost,
 			fmt.Sprintf("bitbucket commit: %s/%s", repoSlug, firstLine),
@@ -1676,27 +1763,16 @@ func fetchBBPRActivity(ctx context.Context, bbClient *bitbucket.Client, config C
 			log.Debugf("Response HTTP Code: %d", response.Code)
 		}
 		if err != nil {
-			if response != nil && response.Code == 429 {
-				retryAfter := handleBitbucketRateLimit(response, log)
+			retry, retryAfter, resultErr := classifyBBPRActivityError(response, err, log)
+			if retry {
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
-			// 404 means no PRs exist for this repo; treat as empty
-			if response != nil && response.Code == 404 {
-				return nil, nil
-			}
-			return nil, err
+			return nil, resultErr
 		}
 
-		done := false
-		for _, activity := range page.Values {
-			ts, ok := bbPRActivityTime(activity)
-			if !ok || !ts.After(startTime) {
-				done = true
-				break
-			}
-			activities = append(activities, activity)
-		}
+		pageActivities, done := collectBBPRActivitiesUntil(page.Values, startTime)
+		activities = append(activities, pageActivities...)
 
 		if done || page.Next == "" {
 			break
@@ -1708,6 +1784,34 @@ func fetchBBPRActivity(ctx context.Context, bbClient *bitbucket.Client, config C
 	return activities, nil
 }
 
+// classifyBBPRActivityError determines whether a failed pull-request activity
+// call should be retried after a rate limit. A 404 means no PRs exist for
+// this repo and is treated as an empty (nil, nil) result.
+func classifyBBPRActivityError(response *models.ResponseScheme, err error, log *zap.SugaredLogger) (retry bool, retryAfterSeconds int, resultErr error) {
+	switch {
+	case response != nil && response.Code == 429:
+		return true, handleBitbucketRateLimit(response, log), nil
+	case response != nil && response.Code == 404:
+		return false, 0, nil
+	default:
+		return false, 0, err
+	}
+}
+
+// collectBBPRActivitiesUntil appends activities newer than startTime.
+// Activities are returned newest-first, so it stops (done=true) at the first
+// activity that is at or before startTime, or has no usable timestamp.
+func collectBBPRActivitiesUntil(values []BBPRActivity, startTime time.Time) (activities []BBPRActivity, done bool) {
+	for _, activity := range values {
+		ts, ok := bbPRActivityTime(activity)
+		if !ok || !ts.After(startTime) {
+			return activities, true
+		}
+		activities = append(activities, activity)
+	}
+	return activities, false
+}
+
 func processBBPRActivityEvents(repoSlug string, activities []BBPRActivity, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, fluentBitClient *FluentBitClient) {
 	for _, activity := range activities {
 		action := bbPRActivityAction(activity)
@@ -1717,7 +1821,7 @@ func processBBPRActivityEvents(repoSlug string, activities []BBPRActivity, log *
 		extra := map[string]interface{}{
 			"_repo":     repoSlug,
 			"_action":   action,
-			"_source":   "bitbucket-commits",
+			"_source":   sourceBitbucketCommits,
 			"_pr_id":    pr.ID,
 			"_pr_title": pr.Title,
 			"_pr_src":   pr.Source.Branch.Name,
@@ -1827,11 +1931,11 @@ func processBBBranchEvents(repoSlug string, stored map[string]string, branches [
 
 	emit := func(action, branch, hash, prevHash string, ts time.Time) {
 		extra := map[string]interface{}{
-			"_repo":    repoSlug,
-			"_action":  action,
-			"_source":  "bitbucket-commits",
-			"_branch":  branch,
-			"_hash":    hash,
+			"_repo":   repoSlug,
+			"_action": action,
+			"_source": sourceBitbucketCommits,
+			"_branch": branch,
+			"_hash":   hash,
 		}
 		if prevHash != "" {
 			extra["_prev_hash"] = prevHash
@@ -1864,8 +1968,10 @@ func processBBBranchEvents(repoSlug string, stored map[string]string, branches [
 	return current
 }
 
-func runBitbucketCommitsSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
-	stateFilename := "bitbucket_commits_state.json"
+// loadBBCommitsRunState loads the persisted checkpoint state and determines
+// the effective start time for this run (from -from if set, otherwise the
+// checkpoint's last event date).
+func loadBBCommitsRunState(config Config, log *zap.SugaredLogger, stateFilename string) (BBCommitsState, time.Time) {
 	state, err := loadBBCommitsState(stateFilename)
 	if err != nil {
 		log.Errorf("Error loading state: %v. Starting from beginning.", err)
@@ -1877,11 +1983,76 @@ func runBitbucketCommitsSource(ctx context.Context, config Config, log *zap.Suga
 	startTime := state.LastEventDate.Add(time.Second)
 
 	if config.From != "" {
-		startTime, err = time.Parse(time.RFC3339, config.From)
+		parsed, err := time.Parse(time.RFC3339, config.From)
 		if err != nil {
 			log.Fatalf("Invalid from date: %v", err)
 		}
+		startTime = parsed
 	}
+
+	return state, startTime
+}
+
+// processBBRepoCommits fetches and emits new commits for repoSlug, returning
+// the timestamp of the newest commit seen, or the zero Time if there were
+// none to report.
+func processBBRepoCommits(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, startTime time.Time, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) time.Time {
+	commits, err := fetchBBCommitsForRepo(ctx, bbClient, config, repoSlug, startTime, log)
+	if err != nil {
+		log.Errorf("Error fetching commits for repo %q: %v", repoSlug, err)
+		return time.Time{}
+	}
+	if len(commits) == 0 {
+		log.Debugf("No new commits in repo %q", repoSlug)
+		return time.Time{}
+	}
+	log.Infof("Found %d new commits in repo %q", len(commits), repoSlug)
+	processBBCommitEvents(repoSlug, commits, log, gelfWriter, config.GELFHost, fluentBitClient)
+	// commits are newest-first
+	if ts, tsErr := parseBBTime(commits[0].Date); tsErr == nil {
+		return ts
+	}
+	return time.Time{}
+}
+
+// processBBRepoBranches fetches current branches for repoSlug and emits
+// push/create/delete events by diffing against stored. ok is false if the
+// branch fetch failed, in which case the caller should leave state
+// untouched.
+func processBBRepoBranches(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, stored map[string]string, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) (updated map[string]string, ok bool) {
+	branches, err := fetchBBBranches(ctx, bbClient, config, repoSlug, log)
+	if err != nil {
+		log.Errorf("Error fetching branches for repo %q: %v", repoSlug, err)
+		return nil, false
+	}
+	return processBBBranchEvents(repoSlug, stored, branches, log, gelfWriter, config.GELFHost, fluentBitClient), true
+}
+
+// processBBRepoPRActivity fetches and emits new PR activity for repoSlug,
+// returning the timestamp of the newest activity seen, or the zero Time if
+// there was none to report.
+func processBBRepoPRActivity(ctx context.Context, bbClient *bitbucket.Client, config Config, repoSlug string, startTime time.Time, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) time.Time {
+	activities, err := fetchBBPRActivity(ctx, bbClient, config, repoSlug, startTime, log)
+	if err != nil {
+		log.Errorf("Error fetching PR activity for repo %q: %v", repoSlug, err)
+		return time.Time{}
+	}
+	if len(activities) == 0 {
+		log.Debugf("No new PR activity in repo %q", repoSlug)
+		return time.Time{}
+	}
+	log.Infof("Found %d new PR activity events in repo %q", len(activities), repoSlug)
+	processBBPRActivityEvents(repoSlug, activities, log, gelfWriter, config.GELFHost, fluentBitClient)
+	// activities are newest-first
+	if ts, ok := bbPRActivityTime(activities[0]); ok {
+		return ts
+	}
+	return time.Time{}
+}
+
+func runBitbucketCommitsSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
+	stateFilename := "bitbucket_commits_state.json"
+	state, startTime := loadBBCommitsRunState(config, log, stateFilename)
 
 	bbClient, err := initBitbucketClient(config, log)
 	if err != nil {
@@ -1912,44 +2083,16 @@ func runBitbucketCommitsSource(ctx context.Context, config Config, log *zap.Suga
 
 	for _, repo := range repos {
 		// --- commits ---
-		commits, fetchErr := fetchBBCommitsForRepo(ctx, bbClient, config, repo.Slug, startTime, log)
-		if fetchErr != nil {
-			log.Errorf("Error fetching commits for repo %q: %v", repo.Slug, fetchErr)
-		} else if len(commits) == 0 {
-			log.Debugf("No new commits in repo %q", repo.Slug)
-		} else {
-			log.Infof("Found %d new commits in repo %q", len(commits), repo.Slug)
-			processBBCommitEvents(repo.Slug, commits, log, gelfWriter, config.GELFHost, fluentBitClient)
-			// commits are newest-first
-			if ts, tsErr := parseBBTime(commits[0].Date); tsErr == nil {
-				updateLatest(ts)
-			}
-		}
+		updateLatest(processBBRepoCommits(ctx, bbClient, config, repo.Slug, startTime, log, gelfWriter, fluentBitClient))
 
 		// --- branch push / create / delete detection ---
-		branches, branchErr := fetchBBBranches(ctx, bbClient, config, repo.Slug, log)
-		if branchErr != nil {
-			log.Errorf("Error fetching branches for repo %q: %v", repo.Slug, branchErr)
-		} else {
-			stored := state.BranchTips[repo.Slug] // nil on first run for this repo
-			updated := processBBBranchEvents(repo.Slug, stored, branches, log, gelfWriter, config.GELFHost, fluentBitClient)
+		stored := state.BranchTips[repo.Slug] // nil on first run for this repo
+		if updated, ok := processBBRepoBranches(ctx, bbClient, config, repo.Slug, stored, log, gelfWriter, fluentBitClient); ok {
 			state.BranchTips[repo.Slug] = updated
 		}
 
 		// --- PR activity (comments, approvals, opens, merges, declines) ---
-		activities, actErr := fetchBBPRActivity(ctx, bbClient, config, repo.Slug, startTime, log)
-		if actErr != nil {
-			log.Errorf("Error fetching PR activity for repo %q: %v", repo.Slug, actErr)
-		} else if len(activities) == 0 {
-			log.Debugf("No new PR activity in repo %q", repo.Slug)
-		} else {
-			log.Infof("Found %d new PR activity events in repo %q", len(activities), repo.Slug)
-			processBBPRActivityEvents(repo.Slug, activities, log, gelfWriter, config.GELFHost, fluentBitClient)
-			// activities are newest-first
-			if ts, ok := bbPRActivityTime(activities[0]); ok {
-				updateLatest(ts)
-			}
-		}
+		updateLatest(processBBRepoPRActivity(ctx, bbClient, config, repo.Slug, startTime, log, gelfWriter, fluentBitClient))
 	}
 
 	if !latestSeen.IsZero() {
@@ -2040,175 +2183,230 @@ type resolvedAssociatedItem struct {
 func processJiraAuditRecords(pages []*models.AuditRecordPageScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, page := range pages {
 		for _, record := range page.Records {
-			objectName := ""
-			objectType := ""
-			objectID := ""
-			objectIDDisplayName := ""
-			if record.ObjectItem != nil {
-				objectName = record.ObjectItem.Name
-				objectType = record.ObjectItem.TypeName
-				objectID = record.ObjectItem.ID
-				if strings.HasPrefix(objectID, "ug:") && migrationResolver != nil {
-					objectIDDisplayName = migrationResolver.resolve(objectID)
-				}
-			}
+			processJiraAuditRecord(record, log, gelfWriter, gelfHost, resolver, migrationResolver, fluentBitClient)
+		}
+	}
+}
 
-			var authorDisplayName string
-			if record.AuthorAccountID != "" {
-				if strings.HasPrefix(record.AuthorAccountID, "ug:") && migrationResolver != nil {
-					authorDisplayName = migrationResolver.resolve(record.AuthorAccountID)
-				} else if resolver != nil {
-					authorDisplayName = resolver.resolve(record.AuthorAccountID)
-				}
-			}
+func processJiraAuditRecord(record *models.AuditRecordScheme, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, resolver *UserResolver, migrationResolver *UserResolver, fluentBitClient *FluentBitClient) {
+	objectName, objectType, objectID, objectIDDisplayName := resolveJiraObjectInfo(record, migrationResolver)
+	authorDisplayName := resolveJiraAuthorDisplayName(record.AuthorAccountID, resolver, migrationResolver)
+	// Resolve ug:UUID in changed values and associated items, preserving originals.
+	rcs := resolveJiraChangedValues(record.ChangedValues, migrationResolver)
+	rais := resolveJiraAssociatedItems(record.AssociatedItems, migrationResolver)
 
-			// Resolve ug:UUID in changed values, preserving originals.
-			rcs := make([]resolvedChange, 0, len(record.ChangedValues))
-			for _, cv := range record.ChangedValues {
-				rc := resolvedChange{
-					FieldName:   cv.FieldName,
-					ChangedFrom: cv.ChangedFrom,
-					ChangedTo:   cv.ChangedTo,
-				}
-				if strings.HasPrefix(cv.ChangedFrom, "ug:") && migrationResolver != nil {
-					rc.ChangedFromName = migrationResolver.resolve(cv.ChangedFrom)
-				}
-				if strings.HasPrefix(cv.ChangedTo, "ug:") && migrationResolver != nil {
-					rc.ChangedToName = migrationResolver.resolve(cv.ChangedTo)
-				}
-				rcs = append(rcs, rc)
-			}
+	log.Info(buildJiraAuditLogArgs(record, objectName, objectType, objectID, objectIDDisplayName, authorDisplayName, rcs, rais)...)
 
-			// Resolve ug:UUID in associated items, preserving originals.
-			// Both id and name can carry a ug:UUID value.
-			rais := make([]resolvedAssociatedItem, 0, len(record.AssociatedItems))
-			for _, ai := range record.AssociatedItems {
-				rai := resolvedAssociatedItem{
-					ID:         ai.ID,
-					Name:       ai.Name,
-					TypeName:   ai.TypeName,
-					ParentID:   ai.ParentID,
-					ParentName: ai.ParentName,
-				}
-				if strings.HasPrefix(ai.ID, "ug:") && migrationResolver != nil {
-					rai.IDName = migrationResolver.resolve(ai.ID)
-				}
-				if strings.HasPrefix(ai.Name, "ug:") && migrationResolver != nil {
-					rai.NameResolved = migrationResolver.resolve(ai.Name)
-				}
-				rais = append(rais, rai)
-			}
+	ts, err := time.Parse("2006-01-02T15:04:05.999-0700", record.Created)
+	if err != nil {
+		ts = time.Now().UTC()
+	}
+	extra := buildJiraAuditExtra(record, objectName, objectType, objectID, objectIDDisplayName, authorDisplayName, rcs, rais)
+	sendGELF(gelfWriter, gelfHost,
+		fmt.Sprintf("jira audit: %s", record.Summary),
+		ts,
+		extra,
+		log,
+	)
+	sendFluentBit(fluentBitClient, extra, log)
+}
 
-			// Build log args dynamically; skip empty optional fields.
-			logArgs := []interface{}{
-				"Record ID:", record.ID,
-				", Created:", record.Created,
-				", Author:", record.AuthorAccountID,
-				", Author Display Name:", authorDisplayName,
-				", Summary:", record.Summary,
-				", Category:", record.Category,
-				", Remote Address:", record.RemoteAddress,
-				", Object:", objectName,
-				", Object Type:", objectType,
-			}
-			if objectID != "" {
-				logArgs = append(logArgs, ", Object ID:", objectID)
-				if objectIDDisplayName != "" {
-					logArgs = append(logArgs, ", Object ID Display Name:", objectIDDisplayName)
-				}
-			}
-			for i, rc := range rcs {
-				logArgs = append(logArgs,
-					fmt.Sprintf(", changedValue[%d] field:", i), rc.FieldName,
-					fmt.Sprintf(", changedValue[%d] from:", i), rc.ChangedFrom,
-				)
-				if rc.ChangedFromName != "" {
-					logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] from name:", i), rc.ChangedFromName)
-				}
-				logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to:", i), rc.ChangedTo)
-				if rc.ChangedToName != "" {
-					logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to name:", i), rc.ChangedToName)
-				}
-			}
-			for i, rai := range rais {
-				name := rai.Name
-				if rai.NameResolved != "" {
-					name = rai.NameResolved
-				}
-				logArgs = append(logArgs,
-					fmt.Sprintf(", associatedItem[%d] id:", i), rai.ID,
-					fmt.Sprintf(", associatedItem[%d] name:", i), name,
-					fmt.Sprintf(", associatedItem[%d] type:", i), rai.TypeName,
-				)
-				if rai.ParentID != "" {
-					logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_id:", i), rai.ParentID)
-				}
-				if rai.ParentName != "" {
-					logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_name:", i), rai.ParentName)
-				}
-			}
-			log.Info(logArgs...)
+// resolveJiraObjectInfo extracts the object item fields from record, resolving
+// a ug:UUID object ID to a display name via migrationResolver when present.
+func resolveJiraObjectInfo(record *models.AuditRecordScheme, migrationResolver *UserResolver) (name, objType, id, idDisplayName string) {
+	if record.ObjectItem == nil {
+		return "", "", "", ""
+	}
+	name = record.ObjectItem.Name
+	objType = record.ObjectItem.TypeName
+	id = record.ObjectItem.ID
+	if strings.HasPrefix(id, "ug:") && migrationResolver != nil {
+		idDisplayName = migrationResolver.resolve(id)
+	}
+	return name, objType, id, idDisplayName
+}
 
-			ts, err := time.Parse("2006-01-02T15:04:05.999-0700", record.Created)
-			if err != nil {
-				ts = time.Now().UTC()
-			}
-			extra := map[string]interface{}{
-				"_record_id":           record.ID,
-				"_created":             record.Created,
-				"_author":              record.AuthorAccountID,
-				"_author_display_name": authorDisplayName,
-				"_summary":             record.Summary,
-				"_category":            record.Category,
-				"_remote_address":      record.RemoteAddress,
-				"_object":              objectName,
-				"_object_type":         objectType,
-				"_source":              "jira",
-			}
-			if objectID != "" {
-				extra["_object_id"] = objectID
-				if objectIDDisplayName != "" {
-					extra["_object_id_display_name"] = objectIDDisplayName
-				}
-			}
-			for i, rc := range rcs {
-				p := fmt.Sprintf("_changedValue%d_", i)
-				extra[p+"field"] = rc.FieldName
-				extra[p+"from"] = rc.ChangedFrom
-				if rc.ChangedFromName != "" {
-					extra[p+"from_name"] = rc.ChangedFromName
-				}
-				extra[p+"to"] = rc.ChangedTo
-				if rc.ChangedToName != "" {
-					extra[p+"to_name"] = rc.ChangedToName
-				}
-			}
-			for i, rai := range rais {
-				p := fmt.Sprintf("_associatedItem%d_", i)
-				extra[p+"id"] = rai.ID
-				if rai.IDName != "" {
-					extra[p+"id_name"] = rai.IDName
-				}
-				name := rai.Name
-				if rai.NameResolved != "" {
-					name = rai.NameResolved
-				}
-				extra[p+"name"] = name
-				extra[p+"type"] = rai.TypeName
-				if rai.ParentID != "" {
-					extra[p+"parent_id"] = rai.ParentID
-				}
-				if rai.ParentName != "" {
-					extra[p+"parent_name"] = rai.ParentName
-				}
-			}
-			sendGELF(gelfWriter, gelfHost,
-				fmt.Sprintf("jira audit: %s", record.Summary),
-				ts,
-				extra,
-				log,
-			)
-			sendFluentBit(fluentBitClient, extra, log)
+// resolveJiraAuthorDisplayName resolves an audit record's author account ID
+// to a display name, preferring the migration resolver for ug:UUID values.
+func resolveJiraAuthorDisplayName(authorAccountID string, resolver, migrationResolver *UserResolver) string {
+	if authorAccountID == "" {
+		return ""
+	}
+	if strings.HasPrefix(authorAccountID, "ug:") && migrationResolver != nil {
+		return migrationResolver.resolve(authorAccountID)
+	}
+	if resolver != nil {
+		return resolver.resolve(authorAccountID)
+	}
+	return ""
+}
+
+// resolveJiraChangedValues resolves ug:UUID changed-from/to values, preserving
+// the original values alongside their resolved display names.
+func resolveJiraChangedValues(values []*models.AuditRecordChangedValueScheme, migrationResolver *UserResolver) []resolvedChange {
+	rcs := make([]resolvedChange, 0, len(values))
+	for _, cv := range values {
+		rc := resolvedChange{
+			FieldName:   cv.FieldName,
+			ChangedFrom: cv.ChangedFrom,
+			ChangedTo:   cv.ChangedTo,
+		}
+		if strings.HasPrefix(cv.ChangedFrom, "ug:") && migrationResolver != nil {
+			rc.ChangedFromName = migrationResolver.resolve(cv.ChangedFrom)
+		}
+		if strings.HasPrefix(cv.ChangedTo, "ug:") && migrationResolver != nil {
+			rc.ChangedToName = migrationResolver.resolve(cv.ChangedTo)
+		}
+		rcs = append(rcs, rc)
+	}
+	return rcs
+}
+
+// resolveJiraAssociatedItems resolves ug:UUID associated item id/name values,
+// preserving the originals alongside their resolved display names. Both id
+// and name can carry a ug:UUID value.
+func resolveJiraAssociatedItems(items []*models.AuditRecordAssociatedItemScheme, migrationResolver *UserResolver) []resolvedAssociatedItem {
+	rais := make([]resolvedAssociatedItem, 0, len(items))
+	for _, ai := range items {
+		rai := resolvedAssociatedItem{
+			ID:         ai.ID,
+			Name:       ai.Name,
+			TypeName:   ai.TypeName,
+			ParentID:   ai.ParentID,
+			ParentName: ai.ParentName,
+		}
+		if strings.HasPrefix(ai.ID, "ug:") && migrationResolver != nil {
+			rai.IDName = migrationResolver.resolve(ai.ID)
+		}
+		if strings.HasPrefix(ai.Name, "ug:") && migrationResolver != nil {
+			rai.NameResolved = migrationResolver.resolve(ai.Name)
+		}
+		rais = append(rais, rai)
+	}
+	return rais
+}
+
+// buildJiraAuditLogArgs builds the args for the human-readable audit log
+// line, skipping empty optional fields.
+func buildJiraAuditLogArgs(record *models.AuditRecordScheme, objectName, objectType, objectID, objectIDDisplayName, authorDisplayName string, rcs []resolvedChange, rais []resolvedAssociatedItem) []interface{} {
+	logArgs := []interface{}{
+		"Record ID:", record.ID,
+		", Created:", record.Created,
+		", Author:", record.AuthorAccountID,
+		", Author Display Name:", authorDisplayName,
+		", Summary:", record.Summary,
+		", Category:", record.Category,
+		", Remote Address:", record.RemoteAddress,
+		", Object:", objectName,
+		", Object Type:", objectType,
+	}
+	if objectID != "" {
+		logArgs = append(logArgs, ", Object ID:", objectID)
+		if objectIDDisplayName != "" {
+			logArgs = append(logArgs, ", Object ID Display Name:", objectIDDisplayName)
+		}
+	}
+	logArgs = appendChangedValueLogArgs(logArgs, rcs)
+	logArgs = appendAssociatedItemLogArgs(logArgs, rais)
+	return logArgs
+}
+
+func appendChangedValueLogArgs(logArgs []interface{}, rcs []resolvedChange) []interface{} {
+	for i, rc := range rcs {
+		logArgs = append(logArgs,
+			fmt.Sprintf(", changedValue[%d] field:", i), rc.FieldName,
+			fmt.Sprintf(", changedValue[%d] from:", i), rc.ChangedFrom,
+		)
+		if rc.ChangedFromName != "" {
+			logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] from name:", i), rc.ChangedFromName)
+		}
+		logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to:", i), rc.ChangedTo)
+		if rc.ChangedToName != "" {
+			logArgs = append(logArgs, fmt.Sprintf(", changedValue[%d] to name:", i), rc.ChangedToName)
+		}
+	}
+	return logArgs
+}
+
+func appendAssociatedItemLogArgs(logArgs []interface{}, rais []resolvedAssociatedItem) []interface{} {
+	for i, rai := range rais {
+		name := rai.Name
+		if rai.NameResolved != "" {
+			name = rai.NameResolved
+		}
+		logArgs = append(logArgs,
+			fmt.Sprintf(", associatedItem[%d] id:", i), rai.ID,
+			fmt.Sprintf(", associatedItem[%d] name:", i), name,
+			fmt.Sprintf(", associatedItem[%d] type:", i), rai.TypeName,
+		)
+		if rai.ParentID != "" {
+			logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_id:", i), rai.ParentID)
+		}
+		if rai.ParentName != "" {
+			logArgs = append(logArgs, fmt.Sprintf(", associatedItem[%d] parent_name:", i), rai.ParentName)
+		}
+	}
+	return logArgs
+}
+
+// buildJiraAuditExtra builds the structured field map sent to GELF/Fluent Bit.
+func buildJiraAuditExtra(record *models.AuditRecordScheme, objectName, objectType, objectID, objectIDDisplayName, authorDisplayName string, rcs []resolvedChange, rais []resolvedAssociatedItem) map[string]interface{} {
+	extra := map[string]interface{}{
+		"_record_id":           record.ID,
+		"_created":             record.Created,
+		"_author":              record.AuthorAccountID,
+		"_author_display_name": authorDisplayName,
+		"_summary":             record.Summary,
+		"_category":            record.Category,
+		"_remote_address":      record.RemoteAddress,
+		"_object":              objectName,
+		"_object_type":         objectType,
+		"_source":              "jira",
+	}
+	if objectID != "" {
+		extra["_object_id"] = objectID
+		if objectIDDisplayName != "" {
+			extra["_object_id_display_name"] = objectIDDisplayName
+		}
+	}
+	addChangedValuesToExtra(extra, rcs)
+	addAssociatedItemsToExtra(extra, rais)
+	return extra
+}
+
+func addChangedValuesToExtra(extra map[string]interface{}, rcs []resolvedChange) {
+	for i, rc := range rcs {
+		p := fmt.Sprintf("_changedValue%d_", i)
+		extra[p+"field"] = rc.FieldName
+		extra[p+"from"] = rc.ChangedFrom
+		if rc.ChangedFromName != "" {
+			extra[p+"from_name"] = rc.ChangedFromName
+		}
+		extra[p+"to"] = rc.ChangedTo
+		if rc.ChangedToName != "" {
+			extra[p+"to_name"] = rc.ChangedToName
+		}
+	}
+}
+
+func addAssociatedItemsToExtra(extra map[string]interface{}, rais []resolvedAssociatedItem) {
+	for i, rai := range rais {
+		p := fmt.Sprintf("_associatedItem%d_", i)
+		extra[p+"id"] = rai.ID
+		if rai.IDName != "" {
+			extra[p+"id_name"] = rai.IDName
+		}
+		name := rai.Name
+		if rai.NameResolved != "" {
+			name = rai.NameResolved
+		}
+		extra[p+"name"] = name
+		extra[p+"type"] = rai.TypeName
+		if rai.ParentID != "" {
+			extra[p+"parent_id"] = rai.ParentID
+		}
+		if rai.ParentName != "" {
+			extra[p+"parent_name"] = rai.ParentName
 		}
 	}
 }
@@ -2344,8 +2542,7 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 		}
 
 		if err != nil {
-			if response != nil && response.Code == 429 {
-				retryAfter := handleRateLimitExceeded(response, log)
+			if retry, retryAfter := classifyConfluenceFetchError(response, log); retry {
 				time.Sleep(time.Duration(retryAfter) * time.Second)
 				continue
 			}
@@ -2368,6 +2565,15 @@ func fetchConfluenceAuditRecords(ctx context.Context, confluenceClient *confluen
 	return pages, nil
 }
 
+// classifyConfluenceFetchError reports whether a failed Confluence audit call
+// was rate-limited and, if so, how long to wait before retrying.
+func classifyConfluenceFetchError(response *models.ResponseScheme, log *zap.SugaredLogger) (retry bool, retryAfterSeconds int) {
+	if response != nil && response.Code == 429 {
+		return true, handleRateLimitExceeded(response, log)
+	}
+	return false, 0
+}
+
 // parseGroupUserName splits a Confluence affectedObject name of the form
 // "GROUP_UUID; User: ACCOUNT_ID" into its two component parts.
 // Returns empty strings when the name does not match this pattern.
@@ -2382,86 +2588,108 @@ func parseGroupUserName(name string) (groupID, userAccountID string) {
 func processConfluenceAuditRecords(pages []ConfluenceAuditPage, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, groupResolver *UserResolver, userResolver *UserResolver, fluentBitClient *FluentBitClient) {
 	for _, page := range pages {
 		for _, record := range page.Results {
-			createdMs := time.UnixMilli(record.CreationDate).UTC()
-
-			// Resolve affectedObject.name when it encodes "GROUP_UUID; User: ACCOUNT_ID".
-			groupID, userAccountID := parseGroupUserName(record.AffectedObject.Name)
-			var affectedGroupName, affectedUserName string
-			if groupID != "" && groupResolver != nil {
-				affectedGroupName = groupResolver.resolve(groupID)
-			}
-			if userAccountID != "" && userResolver != nil {
-				affectedUserName = userResolver.resolve(userAccountID)
-			}
-
-			logArgs := []interface{}{
-				"Created:", createdMs.Format(time.RFC3339),
-				", Author:", record.Author.DisplayName,
-				", Author Account:", record.Author.AccountID,
-				", Summary:", record.Summary,
-				", Category:", record.Category,
-				", Remote Address:", record.RemoteAddress,
-				", affectedObject name:", record.AffectedObject.Name,
-				", affectedObject type:", record.AffectedObject.ObjectType,
-			}
-			if affectedGroupName != "" {
-				logArgs = append(logArgs, ", affectedObject group name:", affectedGroupName)
-			}
-			if affectedUserName != "" {
-				logArgs = append(logArgs, ", affectedObject user name:", affectedUserName)
-			}
-			for i, cv := range record.ChangedValues {
-				logArgs = append(logArgs,
-					fmt.Sprintf(", changedValue[%d] name:", i), cv.Name,
-					fmt.Sprintf(", changedValue[%d] from:", i), cv.OldValue,
-					fmt.Sprintf(", changedValue[%d] to:", i), cv.NewValue,
-				)
-			}
-			for i, ao := range record.AssociatedObjects {
-				logArgs = append(logArgs,
-					fmt.Sprintf(", associatedObject[%d] name:", i), ao.Name,
-					fmt.Sprintf(", associatedObject[%d] type:", i), ao.ObjectType,
-				)
-			}
-			log.Info(logArgs...)
-
-			extra := map[string]interface{}{
-				"_created":             createdMs.Format(time.RFC3339),
-				"_author":              record.Author.DisplayName,
-				"_author_account":      record.Author.AccountID,
-				"_summary":             record.Summary,
-				"_category":            record.Category,
-				"_remote_address":      record.RemoteAddress,
-				"_affectedObject_name": record.AffectedObject.Name,
-				"_affectedObject_type": record.AffectedObject.ObjectType,
-				"_source":              "confluence",
-			}
-			if affectedGroupName != "" {
-				extra["_affectedObject_group_name"] = affectedGroupName
-			}
-			if affectedUserName != "" {
-				extra["_affectedObject_user_name"] = affectedUserName
-			}
-			for i, cv := range record.ChangedValues {
-				p := fmt.Sprintf("_changedValue%d_", i)
-				extra[p+"name"] = cv.Name
-				extra[p+"from"] = cv.OldValue
-				extra[p+"to"] = cv.NewValue
-			}
-			for i, ao := range record.AssociatedObjects {
-				p := fmt.Sprintf("_associatedObject%d_", i)
-				extra[p+"name"] = ao.Name
-				extra[p+"type"] = ao.ObjectType
-			}
-			sendGELF(gelfWriter, gelfHost,
-				fmt.Sprintf("confluence audit: %s", record.Summary),
-				createdMs,
-				extra,
-				log,
-			)
-			sendFluentBit(fluentBitClient, extra, log)
+			processConfluenceAuditRecord(record, log, gelfWriter, gelfHost, groupResolver, userResolver, fluentBitClient)
 		}
 	}
+}
+
+func processConfluenceAuditRecord(record ConfluenceAuditRecord, log *zap.SugaredLogger, gelfWriter GELFWriter, gelfHost string, groupResolver *UserResolver, userResolver *UserResolver, fluentBitClient *FluentBitClient) {
+	createdMs := time.UnixMilli(record.CreationDate).UTC()
+
+	affectedGroupName, affectedUserName := resolveConfluenceAffectedNames(record.AffectedObject.Name, groupResolver, userResolver)
+
+	log.Info(buildConfluenceAuditLogArgs(record, createdMs, affectedGroupName, affectedUserName)...)
+
+	extra := buildConfluenceAuditExtra(record, createdMs, affectedGroupName, affectedUserName)
+	sendGELF(gelfWriter, gelfHost,
+		fmt.Sprintf("confluence audit: %s", record.Summary),
+		createdMs,
+		extra,
+		log,
+	)
+	sendFluentBit(fluentBitClient, extra, log)
+}
+
+// resolveConfluenceAffectedNames resolves affectedObject.name when it encodes
+// "GROUP_UUID; User: ACCOUNT_ID" into display names.
+func resolveConfluenceAffectedNames(affectedObjectName string, groupResolver, userResolver *UserResolver) (groupName, userName string) {
+	groupID, userAccountID := parseGroupUserName(affectedObjectName)
+	if groupID != "" && groupResolver != nil {
+		groupName = groupResolver.resolve(groupID)
+	}
+	if userAccountID != "" && userResolver != nil {
+		userName = userResolver.resolve(userAccountID)
+	}
+	return groupName, userName
+}
+
+// buildConfluenceAuditLogArgs builds the args for the human-readable audit
+// log line, skipping empty optional fields.
+func buildConfluenceAuditLogArgs(record ConfluenceAuditRecord, createdMs time.Time, affectedGroupName, affectedUserName string) []interface{} {
+	logArgs := []interface{}{
+		"Created:", createdMs.Format(time.RFC3339),
+		", Author:", record.Author.DisplayName,
+		", Author Account:", record.Author.AccountID,
+		", Summary:", record.Summary,
+		", Category:", record.Category,
+		", Remote Address:", record.RemoteAddress,
+		", affectedObject name:", record.AffectedObject.Name,
+		", affectedObject type:", record.AffectedObject.ObjectType,
+	}
+	if affectedGroupName != "" {
+		logArgs = append(logArgs, ", affectedObject group name:", affectedGroupName)
+	}
+	if affectedUserName != "" {
+		logArgs = append(logArgs, ", affectedObject user name:", affectedUserName)
+	}
+	for i, cv := range record.ChangedValues {
+		logArgs = append(logArgs,
+			fmt.Sprintf(", changedValue[%d] name:", i), cv.Name,
+			fmt.Sprintf(", changedValue[%d] from:", i), cv.OldValue,
+			fmt.Sprintf(", changedValue[%d] to:", i), cv.NewValue,
+		)
+	}
+	for i, ao := range record.AssociatedObjects {
+		logArgs = append(logArgs,
+			fmt.Sprintf(", associatedObject[%d] name:", i), ao.Name,
+			fmt.Sprintf(", associatedObject[%d] type:", i), ao.ObjectType,
+		)
+	}
+	return logArgs
+}
+
+// buildConfluenceAuditExtra builds the structured field map sent to
+// GELF/Fluent Bit.
+func buildConfluenceAuditExtra(record ConfluenceAuditRecord, createdMs time.Time, affectedGroupName, affectedUserName string) map[string]interface{} {
+	extra := map[string]interface{}{
+		"_created":             createdMs.Format(time.RFC3339),
+		"_author":              record.Author.DisplayName,
+		"_author_account":      record.Author.AccountID,
+		"_summary":             record.Summary,
+		"_category":            record.Category,
+		"_remote_address":      record.RemoteAddress,
+		"_affectedObject_name": record.AffectedObject.Name,
+		"_affectedObject_type": record.AffectedObject.ObjectType,
+		"_source":              "confluence",
+	}
+	if affectedGroupName != "" {
+		extra["_affectedObject_group_name"] = affectedGroupName
+	}
+	if affectedUserName != "" {
+		extra["_affectedObject_user_name"] = affectedUserName
+	}
+	for i, cv := range record.ChangedValues {
+		p := fmt.Sprintf("_changedValue%d_", i)
+		extra[p+"name"] = cv.Name
+		extra[p+"from"] = cv.OldValue
+		extra[p+"to"] = cv.NewValue
+	}
+	for i, ao := range record.AssociatedObjects {
+		p := fmt.Sprintf("_associatedObject%d_", i)
+		extra[p+"name"] = ao.Name
+		extra[p+"type"] = ao.ObjectType
+	}
+	return extra
 }
 
 func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLogger, gelfWriter GELFWriter, fluentBitClient *FluentBitClient) {
@@ -2531,7 +2759,7 @@ func main() {
 		runAdminSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "bitbucket":
 		runBitbucketSource(ctx, config, log, gelfWriter, fluentBitClient)
-	case "bitbucket-commits":
+	case sourceBitbucketCommits:
 		runBitbucketCommitsSource(ctx, config, log, gelfWriter, fluentBitClient)
 	case "jira":
 		runJiraSource(ctx, config, log, gelfWriter, fluentBitClient)

@@ -18,4 +18,6 @@ COPY --chown=65532:65532 --from=builder /runtime-state /state
 
 WORKDIR /state
 
+USER 65532:65532
+
 ENTRYPOINT ["/usr/local/bin/atlassian_log_exporter"]
