@@ -476,7 +476,22 @@ The Jira and Confluence audit APIs apply the `from` filter at date granularity, 
 
 ## Known Limitations
 
-- **Missing author / remote address on directory-synced changes.** For Jira and Confluence audit events driven by identity-provider (directory) sync rather than an interactive session, Atlassian returns `author` (or `System`) and `remote_address` empty. User, group, permission and role changes are affected, so you can see *what* changed but usually not *who* did it or from where. The exporter cannot recover data the API does not return; take this into account when building security alerting on this output.
+### The Jira and Confluence audit logs are app audit logs, not security audit logs
+
+The `jira` and `confluence` sources export each product's **own** audit log. Atlassian describes it as recording configuration changes made in the app (see [Audit activities in Jira](https://support.atlassian.com/jira-cloud-administration/docs/audit-activities-in-jira-applications/)): permission schemes, workflows, custom fields, projects and similar. It is not the organization audit log in `admin.atlassian.com`, which records user accounts, group membership, authentication policies and API tokens.
+
+- **User, group and permission changes are only echoes.** Jira and Confluence do log them, but as the cloud identity service propagating a change into the app (`IdentityPlatformRemoteDirectory` / `IDP Directory`). They carry no actor: `author` and `remote_address` are empty (Confluence: author `System`) and `eventSource` is empty. This happens whether the change was made by a person in `admin.atlassian.com` or by directory sync. Confirmed against the raw Jira `/rest/api/2` and `/rest/api/3` `auditing/record` responses. You can see *what* changed, but not *who* did it or from where.
+- **The actor lives in the organization audit log, which requires [Atlassian Guard](https://www.atlassian.com/software/access).** In `admin.atlassian.com` -> Security -> Audit log, the page is an Atlassian Guard feature: without a subscription it only shows a Guard upsell and no events. Use the `admin` source (see [Required Token Scopes / Permissions](#required-token-scopes--permissions)) to export it.
+- **Without Guard there is no way to recover the actor.** The exporter cannot add data the Jira and Confluence APIs do not return. Do not rely on the `jira` / `confluence` sources for security alerting on access changes.
+
+Atlassian's documentation lists this as a known issue: the *Author* field is not populated for changes made in the user management pages, including users being created or assigned to groups. It is tracked as [JRACLOUD-95188](https://jira.atlassian.com/browse/JRACLOUD-95188) and [JRACLOUD-43160](https://jira.atlassian.com/browse/JRACLOUD-43160).
+
+**References** (so you can verify the above yourself):
+
+- [Audit activities in Jira](https://support.atlassian.com/jira-cloud-administration/docs/audit-activities-in-jira-applications/): what the Jira audit log records, and the known issue with the *Author* field for user management changes.
+- [JRACLOUD-95188](https://jira.atlassian.com/browse/JRACLOUD-95188): adding/removing users to groups does not present the action author in the audit log.
+- [JRACLOUD-43160](https://jira.atlassian.com/browse/JRACLOUD-43160): user and group management events in the Jira audit log are anonymous.
+- [View audit log activities](https://support.atlassian.com/security-and-access-policies/docs/view-audit-log-activities/) and [What activities does the audit log include?](https://support.atlassian.com/security-and-access-policies/docs/accessing-audit-log-activities/): the organization audit log in `admin.atlassian.com`.
 
 ## Error Handling
 
