@@ -24,3 +24,13 @@ go.work.sum
 
 # env file
 .env
+
+# Local runtime config - contains API tokens (config.yaml.example is the template)
+config.yaml
+
+# Persisted checkpoints written at runtime
+*_state.json
+
+# Local API response dumps
+audit
+new_audit.json

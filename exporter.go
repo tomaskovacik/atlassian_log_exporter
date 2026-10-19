@@ -2197,7 +2197,7 @@ func processJiraAuditRecord(record *models.AuditRecordScheme, log *zap.SugaredLo
 
 	log.Info(buildJiraAuditLogArgs(record, objectName, objectType, objectID, objectIDDisplayName, authorDisplayName, rcs, rais)...)
 
-	ts, err := time.Parse("2006-01-02T15:04:05.999-0700", record.Created)
+	ts, err := time.Parse(jiraAuditTimeLayout, record.Created)
 	if err != nil {
 		ts = time.Now().UTC()
 	}
@@ -2447,9 +2447,18 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 	}
 
 	// Records are returned newest-first; pick the first record of the first page as checkpoint.
-	state.LastEventDate, err = time.Parse("2006-01-02T15:04:05.999-0700", pages[0].Records[0].Created)
+	prevCheckpoint := state.LastEventDate
+	newCheckpoint, err := time.Parse(jiraAuditTimeLayout, pages[0].Records[0].Created)
 	if err != nil {
+		// Keep the previous checkpoint: saving a zero time would re-fetch everything.
 		log.Errorf("Error parsing last record date %q: %v", pages[0].Records[0].Created, err)
+		return
+	}
+	state.LastEventDate = newCheckpoint
+
+	// An explicit config.From deliberately re-reads history, so do not dedup then.
+	if config.From == "" {
+		pages = filterJiraPagesAfter(pages, prevCheckpoint, log)
 	}
 
 	jiraMigrationResolver := newJiraBulkMigrationUserResolver(config.JiraURL, config.JiraEmail, config.JiraToken, &http.Client{}, log)
@@ -2458,8 +2467,30 @@ func runJiraSource(ctx context.Context, config Config, log *zap.SugaredLogger, g
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
-		log.Errorf("Error saving state: %v", err)
+		log.Fatalf("Error saving state: %v", err)
 	}
+}
+
+const jiraAuditTimeLayout = "2006-01-02T15:04:05.999-0700"
+
+// filterJiraPagesAfter drops records not strictly newer than cutoff. Jira's
+// audit API applies `from` at date granularity, so the checkpoint day's records
+// are returned on every poll; the API filter cannot be relied on for exclusivity.
+func filterJiraPagesAfter(pages []*models.AuditRecordPageScheme, cutoff time.Time, log *zap.SugaredLogger) []*models.AuditRecordPageScheme {
+	out := make([]*models.AuditRecordPageScheme, 0, len(pages))
+	for _, page := range pages {
+		filtered := *page
+		filtered.Records = nil
+		for _, record := range page.Records {
+			ts, err := time.Parse(jiraAuditTimeLayout, record.Created)
+			if err == nil && !ts.After(cutoff) {
+				continue
+			}
+			filtered.Records = append(filtered.Records, record)
+		}
+		out = append(out, &filtered)
+	}
+	return out
 }
 
 func initConfluenceClient(config Config, log *zap.SugaredLogger) (*confluence.Client, error) {
@@ -2728,7 +2759,13 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 	}
 
 	// Records are returned newest-first; pick the first record of the first page as checkpoint.
+	prevCheckpoint := state.LastEventDate
 	state.LastEventDate = time.UnixMilli(pages[0].Results[0].CreationDate).UTC()
+
+	// An explicit config.From deliberately re-reads history, so do not dedup then.
+	if config.From == "" {
+		pages = filterConfluencePagesAfter(pages, prevCheckpoint)
+	}
 
 	groupResolver := newConfluenceGroupResolver(config.ConfluenceURL, config.ConfluenceEmail, config.ConfluenceToken, &http.Client{}, log)
 	cfUserResolver := newConfluenceUserResolver(config.ConfluenceURL, config.ConfluenceEmail, config.ConfluenceToken, &http.Client{}, log)
@@ -2736,8 +2773,26 @@ func runConfluenceSource(ctx context.Context, config Config, log *zap.SugaredLog
 
 	log.Debugf("Last event time: %v", state.LastEventDate)
 	if err = saveState(state, stateFilename); err != nil {
-		log.Errorf("Error saving state: %v", err)
+		log.Fatalf("Error saving state: %v", err)
 	}
+}
+
+// filterConfluencePagesAfter drops records not strictly newer than cutoff, as
+// the audit API's `from` filter is not reliably exclusive (see filterJiraPagesAfter).
+func filterConfluencePagesAfter(pages []ConfluenceAuditPage, cutoff time.Time) []ConfluenceAuditPage {
+	out := make([]ConfluenceAuditPage, 0, len(pages))
+	for _, page := range pages {
+		filtered := page
+		filtered.Results = nil
+		for _, record := range page.Results {
+			if !time.UnixMilli(record.CreationDate).After(cutoff) {
+				continue
+			}
+			filtered.Results = append(filtered.Results, record)
+		}
+		out = append(out, filtered)
+	}
+	return out
 }
 
 func main() {

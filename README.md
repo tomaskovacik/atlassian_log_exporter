@@ -472,6 +472,12 @@ The application saves the timestamp of the last processed event so it can resume
 - **Jira source**: `jira_state.json`
 - **Confluence source**: `confluence_state.json`
 
+The Jira and Confluence audit APIs apply the `from` filter at date granularity, so the checkpoint day's records are returned again on every poll. The exporter therefore drops any record not strictly newer than the checkpoint loaded at the start of the run. This filtering is skipped when `from` is set explicitly, so that re-reading history still works.
+
+## Known Limitations
+
+- **Missing author / remote address on directory-synced changes.** For Jira and Confluence audit events driven by identity-provider (directory) sync rather than an interactive session, Atlassian returns `author` (or `System`) and `remote_address` empty. User, group, permission and role changes are affected, so you can see *what* changed but usually not *who* did it or from where. The exporter cannot recover data the API does not return; take this into account when building security alerting on this output.
+
 ## Error Handling
 
 The application handles various error scenarios, including API rate limiting. When the rate limit is exceeded, it will wait for the specified time before retrying.

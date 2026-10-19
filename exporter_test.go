@@ -1717,3 +1717,55 @@ func TestSendFluentBit_UnexpectedStatus(t *testing.T) {
 	// Must not panic.
 	sendFluentBit(client, map[string]interface{}{"_key": "val"}, nopLogger())
 }
+
+// ---------- boundary dedup (API `from` is date-granular) ----------
+
+func TestFilterJiraPagesAfter_DropsBoundaryAndOlder(t *testing.T) {
+	cutoff, err := time.Parse(jiraAuditTimeLayout, "2024-06-01T10:00:00.100+0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{
+			{ID: 3, Created: "2024-06-01T10:05:00.000+0000"},
+			{ID: 2, Created: "2024-06-01T10:00:00.100+0000"}, // the checkpoint record itself
+			{ID: 1, Created: "2024-06-01T09:00:00.000+0000"},
+		},
+	}}
+	got := filterJiraPagesAfter(pages, cutoff, nopLogger())
+	if len(got) != 1 || len(got[0].Records) != 1 || got[0].Records[0].ID != 3 {
+		t.Fatalf("expected only record 3 to survive, got %+v", got)
+	}
+	if len(pages[0].Records) != 3 {
+		t.Errorf("input pages must not be mutated")
+	}
+}
+
+func TestFilterJiraPagesAfter_NothingNew(t *testing.T) {
+	cutoff := time.Date(2024, 6, 1, 10, 0, 0, 0, time.UTC)
+	pages := []*models.AuditRecordPageScheme{{
+		Records: []*models.AuditRecordScheme{{ID: 1, Created: "2024-06-01T10:00:00.000+0000"}},
+	}}
+	got := filterJiraPagesAfter(pages, cutoff, nopLogger())
+	if len(got[0].Records) != 0 {
+		t.Fatalf("boundary record must not be re-emitted, got %+v", got[0].Records)
+	}
+}
+
+func TestFilterConfluencePagesAfter_DropsBoundaryAndOlder(t *testing.T) {
+	cutoff := time.UnixMilli(1717228800000)
+	pages := []ConfluenceAuditPage{{
+		Results: []ConfluenceAuditRecord{
+			{Summary: "new", CreationDate: 1717228800001},
+			{Summary: "boundary", CreationDate: 1717228800000},
+			{Summary: "old", CreationDate: 1717228700000},
+		},
+	}}
+	got := filterConfluencePagesAfter(pages, cutoff)
+	if len(got) != 1 || len(got[0].Results) != 1 || got[0].Results[0].Summary != "new" {
+		t.Fatalf("expected only 'new' to survive, got %+v", got)
+	}
+	if len(pages[0].Results) != 3 {
+		t.Errorf("input pages must not be mutated")
+	}
+}
