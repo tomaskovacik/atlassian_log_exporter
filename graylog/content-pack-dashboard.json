@@ -1,0 +1,2063 @@
+{
+ "v": "1",
+ "id": "4b1d9a60-7c35-4e18-9f2a-6d0b83e1c477",
+ "rev": 1,
+ "name": "Atlassian and Bitbucket audit dashboard",
+ "summary": "Four-tab Graylog dashboard for the audit data this exporter ships: access and permission changes, Bitbucket activity, data movement, feed health",
+ "description": "A dashboard for the Jira, Confluence and Bitbucket audit records produced by atlassian_log_exporter, shipped to Graylog over GELF.\n\nTabs:\n  * Access and permissions - group membership changes over time, most-changed groups, privileged configuration changes (group/space create and delete, permission and role changes), and a detail table of who was added or removed and to which group.\n  * Bitbucket - repository activity over time, by repository, by author, and the action-type mix.\n  * Data movement - Confluence site exports and who ran them, content restrictions added, and attribution coverage by category.\n  * Feed health - messages per day by source and the newest audit events, so a stalled exporter is visible rather than silent.\n\nIMPORTANT, and the reason the 'attribution coverage' panel exists: the Jira and Confluence audit log records the ACTOR as the Jira/Confluence application itself for group and user management events. The panels therefore show WHAT changed and TO WHOM, but not who made the change. That is a limitation of the audit log available without Atlassian Guard, not of the exporter or of these queries - verified across the full retained history. Bitbucket commit records DO carry an author.\n\nAll queries key on `source` (jira, confluence, bitbucket-commits) and the `summary` field, so nothing here is specific to one Atlassian site.",
+ "vendor": "community",
+ "url": "https://github.com/tomaskovacik/atlassian_log_exporter",
+ "parameters": [],
+ "entities": [
+  {
+   "id": "85a5c8a7-4e3d-43a1-92dc-83db40db1072",
+   "type": {
+    "name": "dashboard",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "type": "DASHBOARD",
+    "title": {
+     "@type": "string",
+     "@value": "Atlassian and Bitbucket audit"
+    },
+    "summary": {
+     "@type": "string",
+     "@value": "Jira / Confluence access and permission changes, exports, and VCS activity"
+    },
+    "description": {
+     "@type": "string",
+     "@value": "Split out of the platform dashboard: this is a different dataset sharing the same stream. Panels show WHAT changed and TO WHOM - Jira records the actor as the Jira app for group and user management, so who made the change is not available without Atlassian Guard."
+    },
+    "search": {
+     "queries": [
+      {
+       "id": "919693e3-2228-48e7-8b9b-a6945076c4c8",
+       "timerange": {
+        "from": 7776000,
+        "type": "relative"
+       },
+       "filters": [],
+       "query": {
+        "type": "elasticsearch",
+        "query_string": ""
+       },
+       "search_types": [
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "e8ab4a0a-d6f8-488f-bee4-655388fd43ec",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "object"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "66246535-390d-412f-a124-1b338b38770e",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "summary"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "1c83ac4c-4be0-42c1-8736-a5d1d08dd040",
+         "name": null,
+         "limit": 150,
+         "offset": 0,
+         "decorators": [],
+         "type": "messages",
+         "filter": null,
+         "filters": []
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:(\"Group created\" OR \"Group deleted\" OR \"Space created\" OR \"Space permission removed\" OR \"Space role assignment set\" OR \"Space role assignment removed\" OR \"RBAC mode enabled\" OR \"Space owner updated\" OR \"Project deleted\" OR \"Content restriction added\")"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "f6d1ec37-d4f1-4e89-85e0-7ed00027471b",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "summary"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:(\"Group created\" OR \"Group deleted\" OR \"Space created\" OR \"Space permission removed\" OR \"Space role assignment set\" OR \"Space role assignment removed\" OR \"RBAC mode enabled\" OR \"Space owner updated\" OR \"Project deleted\" OR \"Content restriction added\")"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "556e0880-c38b-4089-b08f-990079459599",
+         "name": null,
+         "limit": 150,
+         "offset": 0,
+         "decorators": [],
+         "type": "messages",
+         "filter": null,
+         "filters": []
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence)"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "6419ed6f-b5d0-4583-b817-c4d0211a6b1c",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "category"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "source"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        }
+       ]
+      },
+      {
+       "id": "ab6c3ac6-327b-4963-ad7a-ee15bdc4fbc0",
+       "timerange": {
+        "from": 7776000,
+        "type": "relative"
+       },
+       "filters": [],
+       "query": {
+        "type": "elasticsearch",
+        "query_string": ""
+       },
+       "search_types": [
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:confluence AND summary:\"Content restriction added\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "663f18bb-ee95-4cfb-bee4-8554db4c7e7d",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:\"Site export\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "451f7beb-3593-4aef-81ca-a4cf9cdfbbc9",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "author"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND summary:\"Site export\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "0e3376a9-6c43-4383-810d-037f80967a93",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "author"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) AND _exists_:author"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "1881da24-7e1e-47fa-89f7-48224c469cbc",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "category"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "source"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        }
+       ]
+      },
+      {
+       "id": "96cf598b-4beb-4b7c-a7ff-180d23d9d1ce",
+       "timerange": {
+        "from": 7776000,
+        "type": "relative"
+       },
+       "filters": [],
+       "query": {
+        "type": "elasticsearch",
+        "query_string": ""
+       },
+       "search_types": [
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "a7652d8a-eeb1-4f78-afb5-8214bb8c0e50",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "action"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "fbcfe809-8189-4f5d-8fce-f91ef4114e97",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "repo"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "3823257f-1f8c-400c-8724-cba5778efdc9",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "action"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:\"bitbucket-commits\" AND _exists_:author_name"
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "e9053320-083d-4621-ae15-16d43d46b394",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "author_name"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        }
+       ]
+      },
+      {
+       "id": "41809729-9c17-45a5-9d92-8bd2281715a2",
+       "timerange": {
+        "from": 7776000,
+        "type": "relative"
+       },
+       "filters": [],
+       "query": {
+        "type": "elasticsearch",
+        "query_string": ""
+       },
+       "search_types": [
+        {
+         "timerange": {
+          "from": 34560000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "8c85ffdc-974b-409f-82ea-ed0682f66220",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "source"
+           ],
+           "limit": 20,
+           "skip_empty_values": true
+          }
+         ],
+         "column_groups": [],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        },
+        {
+         "timerange": {
+          "from": 2592000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "15542906-b923-4e5d-b4e9-66c5e1e6e2be",
+         "name": null,
+         "limit": 150,
+         "offset": 0,
+         "decorators": [],
+         "type": "messages",
+         "filter": null,
+         "filters": []
+        },
+        {
+         "timerange": {
+          "from": 7776000,
+          "type": "relative"
+         },
+         "query": {
+          "type": "elasticsearch",
+          "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+         },
+         "streams": [
+          "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+         ],
+         "stream_categories": [],
+         "id": "a033bb82-8bcb-4682-9510-6828eed00134",
+         "name": "chart",
+         "series": [
+          {
+           "type": "count",
+           "id": "count()",
+           "field": null
+          }
+         ],
+         "sort": [],
+         "rollup": true,
+         "type": "pivot",
+         "row_groups": [
+          {
+           "type": "time",
+           "fields": [
+            "timestamp"
+           ],
+           "interval": {
+            "type": "auto",
+            "scaling": 1.0
+           }
+          }
+         ],
+         "column_groups": [
+          {
+           "type": "values",
+           "fields": [
+            "source"
+           ],
+           "limit": 10,
+           "skip_empty_values": true
+          }
+         ],
+         "filter": null,
+         "filters": [],
+         "row_limit": null,
+         "column_limit": null
+        }
+       ]
+      }
+     ],
+     "parameters": [],
+     "requires": {},
+     "owner": "kovo",
+     "created_at": "2026-10-19T19:05:34.184Z"
+    },
+    "properties": [],
+    "requires": {},
+    "state": {
+     "919693e3-2228-48e7-8b9b-a6945076c4c8": {
+      "selected_fields": null,
+      "static_message_list_id": null,
+      "titles": {
+       "widget": {
+        "8fa3c751-f5f0-46c9-9103-a2efa3502a91": "Group membership changes over time",
+        "3108103d-2e65-4235-931c-41e9031de635": "Most-changed groups",
+        "dbb659f3-a3ef-4e26-a551-29f92b078f04": "Privileged configuration changes",
+        "b45cdd45-8dae-4110-837e-a3bab16e717d": "Audit events by category",
+        "3e130849-81da-4114-9ac2-8b6c0c787b14": "Who was added or removed, and to which group",
+        "09e0c6db-5f7c-423b-b92c-a3bc7e58859f": "Privileged configuration detail"
+       },
+       "tab": {
+        "title": "Access and permissions"
+       }
+      },
+      "widgets": [
+       {
+        "id": "09e0c6db-5f7c-423b-b92c-a3bc7e58859f",
+        "type": "messages",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:(\"Group created\" OR \"Group deleted\" OR \"Space created\" OR \"Space permission removed\" OR \"Space role assignment set\" OR \"Space role assignment removed\" OR \"RBAC mode enabled\" OR \"Space owner updated\" OR \"Project deleted\" OR \"Content restriction added\")"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "fields": [
+          "timestamp",
+          "source",
+          "summary",
+          "object",
+          "category",
+          "author"
+         ],
+         "units": {},
+         "show_message_row": true,
+         "show_summary": true,
+         "decorators": [],
+         "sort": [
+          {
+           "type": "pivot",
+           "field": "timestamp",
+           "direction": "Descending"
+          }
+         ]
+        },
+        "description": null,
+        "context": null
+       },
+       {
+        "id": "b45cdd45-8dae-4110-837e-a3bab16e717d",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence)"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "category"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "source"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": 10
+        },
+        "description": "",
+        "context": null
+       },
+       {
+        "id": "dbb659f3-a3ef-4e26-a551-29f92b078f04",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:(\"Group created\" OR \"Group deleted\" OR \"Space created\" OR \"Space permission removed\" OR \"Space role assignment set\" OR \"Space role assignment removed\" OR \"RBAC mode enabled\" OR \"Space owner updated\" OR \"Project deleted\" OR \"Content restriction added\")"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "summary"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": 10
+        },
+        "description": "Group/space creation and deletion, permission and role changes, RBAC mode, project deletion, content restrictions.",
+        "context": null
+       },
+       {
+        "id": "3e130849-81da-4114-9ac2-8b6c0c787b14",
+        "type": "messages",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "fields": [
+          "timestamp",
+          "source",
+          "summary",
+          "object",
+          "associatedItem0_name",
+          "affectedObject_group_name",
+          "affectedObject_user_name"
+         ],
+         "units": {},
+         "show_message_row": true,
+         "show_summary": true,
+         "decorators": [],
+         "sort": [
+          {
+           "type": "pivot",
+           "field": "timestamp",
+           "direction": "Descending"
+          }
+         ]
+        },
+        "description": "The ACTOR is deliberately not shown: Jira records it as the Jira app itself for these events. `associatedItem0_name` (Jira) and `affectedObject_user_name` (Confluence) name the person AFFECTED, which is the actionable half.",
+        "context": null
+       },
+       {
+        "id": "3108103d-2e65-4235-931c-41e9031de635",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "object"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "Jira only - `object` is the group. Confluence uses affectedObject_group_name, shown in the table below.",
+        "context": null
+       },
+       {
+        "id": "8fa3c751-f5f0-46c9-9103-a2efa3502a91",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\")"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "summary"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": 10
+        },
+        "description": "705 REAL events over 400 days on 55 active days. Counts before 2026-10-19 are inflated by the exporter's re-emission bug.",
+        "context": null
+       }
+      ],
+      "widget_mapping": {
+       "8fa3c751-f5f0-46c9-9103-a2efa3502a91": [
+        "66246535-390d-412f-a124-1b338b38770e"
+       ],
+       "3108103d-2e65-4235-931c-41e9031de635": [
+        "e8ab4a0a-d6f8-488f-bee4-655388fd43ec"
+       ],
+       "dbb659f3-a3ef-4e26-a551-29f92b078f04": [
+        "f6d1ec37-d4f1-4e89-85e0-7ed00027471b"
+       ],
+       "b45cdd45-8dae-4110-837e-a3bab16e717d": [
+        "6419ed6f-b5d0-4583-b817-c4d0211a6b1c"
+       ],
+       "3e130849-81da-4114-9ac2-8b6c0c787b14": [
+        "1c83ac4c-4be0-42c1-8736-a5d1d08dd040"
+       ],
+       "09e0c6db-5f7c-423b-b92c-a3bc7e58859f": [
+        "556e0880-c38b-4089-b08f-990079459599"
+       ]
+      },
+      "positions": {
+       "8fa3c751-f5f0-46c9-9103-a2efa3502a91": {
+        "col": 1,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "3108103d-2e65-4235-931c-41e9031de635": {
+        "col": 7,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "dbb659f3-a3ef-4e26-a551-29f92b078f04": {
+        "col": 1,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       },
+       "b45cdd45-8dae-4110-837e-a3bab16e717d": {
+        "col": 7,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       },
+       "3e130849-81da-4114-9ac2-8b6c0c787b14": {
+        "col": 1,
+        "row": 9,
+        "height": 5,
+        "width": 12
+       },
+       "09e0c6db-5f7c-423b-b92c-a3bc7e58859f": {
+        "col": 1,
+        "row": 14,
+        "height": 5,
+        "width": 12
+       }
+      },
+      "formatting": {
+       "highlighting": []
+      },
+      "display_mode_settings": {
+       "positions": {}
+      }
+     },
+     "96cf598b-4beb-4b7c-a7ff-180d23d9d1ce": {
+      "selected_fields": null,
+      "static_message_list_id": null,
+      "titles": {
+       "widget": {
+        "49f342bf-1fd4-421b-9d33-ca0b12cd4672": "Repository activity over time",
+        "a6dd5b63-b47d-4df3-b13b-1d867186ca3e": "Activity by repository",
+        "e300d815-46cb-4eee-8b98-13941e6497e4": "Activity by author",
+        "33a3022d-6069-4b2b-aad1-0c096d912919": "Action types"
+       },
+       "tab": {
+        "title": "Bitbucket"
+       }
+      },
+      "widgets": [
+       {
+        "id": "49f342bf-1fd4-421b-9d33-ca0b12cd4672",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "action"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": 10
+        },
+        "description": "pr_updated, commit, branch_push, branch_created/deleted, pr_declined. Separate schema again: repo, pr_id, branch, commit_hash.",
+        "context": null
+       },
+       {
+        "id": "33a3022d-6069-4b2b-aad1-0c096d912919",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "action"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "pie",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       },
+       {
+        "id": "a6dd5b63-b47d-4df3-b13b-1d867186ca3e",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "repo"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       },
+       {
+        "id": "e300d815-46cb-4eee-8b98-13941e6497e4",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:\"bitbucket-commits\" AND _exists_:author_name"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "author_name"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       }
+      ],
+      "widget_mapping": {
+       "49f342bf-1fd4-421b-9d33-ca0b12cd4672": [
+        "a7652d8a-eeb1-4f78-afb5-8214bb8c0e50"
+       ],
+       "a6dd5b63-b47d-4df3-b13b-1d867186ca3e": [
+        "fbcfe809-8189-4f5d-8fce-f91ef4114e97"
+       ],
+       "e300d815-46cb-4eee-8b98-13941e6497e4": [
+        "e9053320-083d-4621-ae15-16d43d46b394"
+       ],
+       "33a3022d-6069-4b2b-aad1-0c096d912919": [
+        "3823257f-1f8c-400c-8724-cba5778efdc9"
+       ]
+      },
+      "positions": {
+       "49f342bf-1fd4-421b-9d33-ca0b12cd4672": {
+        "col": 1,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "a6dd5b63-b47d-4df3-b13b-1d867186ca3e": {
+        "col": 7,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "e300d815-46cb-4eee-8b98-13941e6497e4": {
+        "col": 1,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       },
+       "33a3022d-6069-4b2b-aad1-0c096d912919": {
+        "col": 7,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       }
+      },
+      "formatting": {
+       "highlighting": []
+      },
+      "display_mode_settings": {
+       "positions": {}
+      }
+     },
+     "ab6c3ac6-327b-4963-ad7a-ee15bdc4fbc0": {
+      "selected_fields": null,
+      "static_message_list_id": null,
+      "titles": {
+       "widget": {
+        "73a74134-ca7c-4190-a56a-d7aa847974cc": "Confluence site exports",
+        "e25551da-0ad5-4f9f-a2df-4945eedd0029": "Exports by author",
+        "17033a0d-ae13-4d2f-8afd-8517adbc25fd": "Content restrictions added",
+        "d1faa0d4-9282-4f53-9cc0-afd5a51a232f": "Attribution coverage by category"
+       },
+       "tab": {
+        "title": "Data movement"
+       }
+      },
+      "widgets": [
+       {
+        "id": "73a74134-ca7c-4190-a56a-d7aa847974cc",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:\"Site export\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "author"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": 10
+        },
+        "description": "The one Atlassian event that IS attributed to a named human. 115 real events over 400 days. A full site export is the cleanest bulk-exfiltration signal Confluence emits.",
+        "context": null
+       },
+       {
+        "id": "d1faa0d4-9282-4f53-9cc0-afd5a51a232f",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND _exists_:author"
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "category"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "source"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": 10
+        },
+        "description": "Which categories carry an author at all. Jira projects/sprints/issue do; group and user management do not. Confluence reports 'System' as the author on all Users-and-groups events.",
+        "context": null
+       },
+       {
+        "id": "e25551da-0ad5-4f9f-a2df-4945eedd0029",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) AND summary:\"Site export\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "author"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       },
+       {
+        "id": "17033a0d-ae13-4d2f-8afd-8517adbc25fd",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:confluence AND summary:\"Content restriction added\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       }
+      ],
+      "widget_mapping": {
+       "73a74134-ca7c-4190-a56a-d7aa847974cc": [
+        "0e3376a9-6c43-4383-810d-037f80967a93"
+       ],
+       "e25551da-0ad5-4f9f-a2df-4945eedd0029": [
+        "451f7beb-3593-4aef-81ca-a4cf9cdfbbc9"
+       ],
+       "17033a0d-ae13-4d2f-8afd-8517adbc25fd": [
+        "663f18bb-ee95-4cfb-bee4-8554db4c7e7d"
+       ],
+       "d1faa0d4-9282-4f53-9cc0-afd5a51a232f": [
+        "1881da24-7e1e-47fa-89f7-48224c469cbc"
+       ]
+      },
+      "positions": {
+       "73a74134-ca7c-4190-a56a-d7aa847974cc": {
+        "col": 1,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "e25551da-0ad5-4f9f-a2df-4945eedd0029": {
+        "col": 7,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "17033a0d-ae13-4d2f-8afd-8517adbc25fd": {
+        "col": 1,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       },
+       "d1faa0d4-9282-4f53-9cc0-afd5a51a232f": {
+        "col": 7,
+        "row": 5,
+        "height": 4,
+        "width": 6
+       }
+      },
+      "formatting": {
+       "highlighting": []
+      },
+      "display_mode_settings": {
+       "positions": {}
+      }
+     },
+     "41809729-9c17-45a5-9d92-8bd2281715a2": {
+      "selected_fields": null,
+      "static_message_list_id": null,
+      "titles": {
+       "widget": {
+        "1fe98823-8770-4ca8-86e3-3a512c8bcbfe": "Messages per day by source",
+        "6d2695fa-2162-4c79-9505-77b925e3d451": "Events by source",
+        "09d50024-2fc8-4e4c-8988-3574695cff79": "Newest audit events"
+       },
+       "tab": {
+        "title": "Feed health"
+       }
+      },
+      "widgets": [
+       {
+        "id": "1fe98823-8770-4ca8-86e3-3a512c8bcbfe",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 7776000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "timestamp"
+           ],
+           "type": "time",
+           "config": {
+            "interval": {
+             "type": "auto",
+             "scaling": 1.0
+            }
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [
+          {
+           "fields": [
+            "source"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 10,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "bar",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": null,
+         "column_limit": 10
+        },
+        "description": "A step change on 2026-10-19 is expected and correct: before that the exporter re-emitted every event on each 30-minute poll, roughly a 3-8x inflation on these feeds.",
+        "context": null
+       },
+       {
+        "id": "09d50024-2fc8-4e4c-8988-3574695cff79",
+        "type": "messages",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 2592000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "fields": [
+          "timestamp",
+          "source",
+          "summary",
+          "action",
+          "category"
+         ],
+         "units": {},
+         "show_message_row": true,
+         "show_summary": true,
+         "decorators": [],
+         "sort": [
+          {
+           "type": "pivot",
+           "field": "timestamp",
+           "direction": "Descending"
+          }
+         ]
+        },
+        "description": "Sanity check that all three feeds are still arriving. This is a BURSTY feed - events on 55 of 400 days - so there is deliberately no liveness alert; silence is not a fault.",
+        "context": null
+       },
+       {
+        "id": "6d2695fa-2162-4c79-9505-77b925e3d451",
+        "type": "aggregation",
+        "filter": null,
+        "filters": [],
+        "timerange": {
+         "from": 34560000,
+         "type": "relative"
+        },
+        "query": {
+         "type": "elasticsearch",
+         "query_string": "source:(jira OR confluence) OR source:\"bitbucket-commits\""
+        },
+        "streams": [
+         "db21ed2e-cf40-4815-ba6a-c065b61c2948"
+        ],
+        "stream_categories": [],
+        "config": {
+         "row_pivots": [
+          {
+           "fields": [
+            "source"
+           ],
+           "type": "values",
+           "config": {
+            "limit": 20,
+            "skip_empty_values": true
+           }
+          }
+         ],
+         "units": {},
+         "column_pivots": [],
+         "series": [
+          {
+           "config": {
+            "name": null,
+            "thresholds": []
+           },
+           "function": "count()"
+          }
+         ],
+         "sort": [],
+         "visualization": "table",
+         "visualization_config": null,
+         "formatting_settings": null,
+         "rollup": true,
+         "event_annotation": false,
+         "row_limit": 20,
+         "column_limit": null
+        },
+        "description": "",
+        "context": null
+       }
+      ],
+      "widget_mapping": {
+       "1fe98823-8770-4ca8-86e3-3a512c8bcbfe": [
+        "a033bb82-8bcb-4682-9510-6828eed00134"
+       ],
+       "6d2695fa-2162-4c79-9505-77b925e3d451": [
+        "8c85ffdc-974b-409f-82ea-ed0682f66220"
+       ],
+       "09d50024-2fc8-4e4c-8988-3574695cff79": [
+        "15542906-b923-4e5d-b4e9-66c5e1e6e2be"
+       ]
+      },
+      "positions": {
+       "1fe98823-8770-4ca8-86e3-3a512c8bcbfe": {
+        "col": 1,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "6d2695fa-2162-4c79-9505-77b925e3d451": {
+        "col": 7,
+        "row": 1,
+        "height": 4,
+        "width": 6
+       },
+       "09d50024-2fc8-4e4c-8988-3574695cff79": {
+        "col": 1,
+        "row": 5,
+        "height": 5,
+        "width": 12
+       }
+      },
+      "formatting": {
+       "highlighting": []
+      },
+      "display_mode_settings": {
+       "positions": {}
+      }
+     }
+    },
+    "owner": "kovo",
+    "created_at": "2026-10-19T19:05:34.288Z"
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  },
+  {
+   "id": "db21ed2e-cf40-4815-ba6a-c065b61c2948",
+   "type": {
+    "name": "stream_title",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "title": {
+     "@type": "string",
+     "@value": "GELF-UDP"
+    }
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  }
+ ]
+}
