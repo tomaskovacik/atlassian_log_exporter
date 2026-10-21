@@ -551,6 +551,22 @@ fluentbit_tag: atlassian-audit   # optional; defaults to source name
 
 Both GELF and Fluent Bit outputs can be enabled at the same time.
 
+### Ready-made Graylog dashboard and alerts
+
+[`graylog/`](graylog/) holds two importable Graylog content packs for the data
+this exporter ships (tested on Graylog 7.2):
+
+| file | contents |
+|---|---|
+| `content-pack-dashboard.json` | four-tab dashboard: access and permissions, Bitbucket, data movement, feed health |
+| `content-pack-alerts.json` | three event definitions (group membership, privileged configuration, Confluence site export) plus a stub mail notification |
+
+Two things in [`graylog/README.md`](graylog/README.md) are worth reading before
+you rely on them: the alert window is **60 minutes on purpose** because these
+records arrive later than their own `created` timestamp, and the Jira and
+Confluence audit log **cannot tell you who made a group or user change** —
+it records the actor as the Atlassian app itself.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
