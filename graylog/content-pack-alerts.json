@@ -1,0 +1,597 @@
+{
+ "v": "1",
+ "id": "8e5c2f41-3b76-4a09-9d18-c42e07b5a6f3",
+ "rev": 2,
+ "name": "Atlassian and Bitbucket audit alerts",
+ "summary": "Three Graylog event definitions for the audit data this exporter ships: group membership changes, privileged configuration changes, Confluence site exports",
+ "description": "Three alerts over the Jira/Confluence audit records produced by atlassian_log_exporter.\n\n  * group membership changed - User added to / removed from group\n  * privileged configuration change - group and space create/delete, permission and role changes, RBAC mode, project deletion, content restrictions\n  * Confluence site export - the cleanest bulk-export signal Confluence emits, and the one Atlassian event reliably attributed to a named human\n\nTHE WINDOW IS 60 MINUTES ON PURPOSE. `timestamp` is the audit record's own `created` time, not ingest time, and the exporter polls on an interval, so the aggregation window is measured in event time while records arrive late. Measured over 30 days on one site, collapsing duplicate re-emissions to the earliest ingest per logical event: p50 15.9 min, p95 28.8 min. A 10-minute window misses 57% of events and a 15-minute one misses 53%; 30 min misses 1.1% and 60 min buys margin for free. If your exporter polls less often than ours, RAISE this - do not lower it.\n\nTHESE ALERTS CANNOT TELL YOU WHO MADE THE CHANGE. For group and user management Jira records the actor as the Jira app itself and files the human as an associatedItem, i.e. as the target. The organisation audit log would carry the actor but that is an Atlassian Guard feature. So these answer WHAT changed and TO WHOM, never BY WHOM - still the actionable half for privilege monitoring. `backlog_size` is 10 so the mail LISTS the affected accounts.\n\nAll three fire on `count > 0`: any matching event mails, and the rate limiting is the grace period (12h, 24h for exports), grouped by (source, summary) so a bulk IdP sync collapses into one mail per action type. The `Baseline:` figures in each description are from ONE site (~12, ~6 and ~2 events/week) - read your own rate off the dashboard before deciding whether `> 0` suits you.\n\nThe notification entity is a stub: title Mail, no sender, no recipients. Wire it to your own after import, or point the definitions at an existing one.\n\nThe group-membership alert EXCLUDES the `atlassian-addons` group: that is Atlassian's own provisioning writing into its own addons group (author System, affected user Request Resolver), 93 of 1205 records over 90 days on the reference site, and no human ever adds anyone to it. Verified that the exclusion removes exactly those records and does NOT drop the ~54% of records that carry no group name at all. Drop the clause if your site manages that group deliberately.\n\n`affectedObject_group_name` is in group_by, not just field_spec - that is the only way a field reaches the notification mail body, because for an aggregation event `event.fields` is built from the aggregation result. It also means the grace period is per group, so a change to one group is not suppressed by a recent change to another.",
+ "vendor": "community",
+ "url": "https://github.com/tomaskovacik/atlassian_log_exporter",
+ "parameters": [],
+ "entities": [
+  {
+   "id": "16269706-eebe-4ad0-ae14-3a0ed0701eef",
+   "type": {
+    "name": "event_definition",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "_scope": {
+     "@type": "string",
+     "@value": "DEFAULT"
+    },
+    "title": {
+     "@type": "string",
+     "@value": "Atlassian - Confluence site export"
+    },
+    "description": {
+     "@type": "string",
+     "@value": "Baseline: 115 real events/400d, ~2/week, all by one named user. Disable if those exports are a known routine"
+    },
+    "remediation_steps": {
+     "@type": "string",
+     "@value": ""
+    },
+    "updated_at": "2026-10-21T11:11:42.118Z",
+    "matched_at": null,
+    "priority": {
+     "@type": "integer",
+     "@value": 1
+    },
+    "alert": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "config": {
+     "type": "aggregation-v1",
+     "query": {
+      "@type": "string",
+      "@value": "source:(jira OR confluence) AND summary:\"Site export\""
+     },
+     "query_parameters": [],
+     "filters": [],
+     "streams": [
+      "f217417d-ce54-48bf-b477-fe810464e3d6"
+     ],
+     "stream_categories": [],
+     "group_by": [
+      "source",
+      "author"
+     ],
+     "series": [
+      {
+       "type": "count",
+       "id": "count-0",
+       "field": "source"
+      }
+     ],
+     "conditions": {
+      "expression": {
+       "expr": ">",
+       "left": {
+        "expr": "number-ref",
+        "ref": "count-0"
+       },
+       "right": {
+        "expr": "number",
+        "value": 0.0
+       }
+      }
+     },
+     "search_within_ms": 3600000,
+     "execute_every_ms": 300000,
+     "use_cron_scheduling": false,
+     "cron_expression": null,
+     "cron_timezone": null,
+     "event_limit": 100
+    },
+    "field_spec": {
+     "author": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.author}",
+        "require_values": false,
+        "exclude_empty_fields": true
+       }
+      ]
+     },
+     "source": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.source}",
+        "require_values": true,
+        "exclude_empty_fields": true
+       }
+      ]
+     }
+    },
+    "key_spec": [
+     "source",
+     "author"
+    ],
+    "notification_settings": {
+     "grace_period_ms": 86400000,
+     "backlog_size": 10
+    },
+    "notifications": [
+     {
+      "notification_id": {
+       "@type": "string",
+       "@value": "cb7b29ea-eb61-4af1-a9bc-be02fd37ab12"
+      },
+      "notification_parameters": null
+     }
+    ],
+    "storage": [
+     {
+      "type": "persist-to-streams-v1",
+      "streams": [
+       "000000000000000000000002"
+      ]
+     }
+    ],
+    "tags": [],
+    "is_scheduled": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "event_procedure": null,
+    "event_summary_template": null,
+    "tactics_techniques": []
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  },
+  {
+   "id": "53cb6d38-dc40-4005-b579-b64698d42321",
+   "type": {
+    "name": "event_definition",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "_scope": {
+     "@type": "string",
+     "@value": "DEFAULT"
+    },
+    "title": {
+     "@type": "string",
+     "@value": "Atlassian - group membership changed"
+    },
+    "description": {
+     "@type": "string",
+     "@value": "Baseline: 705 real events/400d on 55 days, ~12/week, EXCLUDING the atlassian-addons group (93 of 1205 records in 90d are Atlassian's own System/Request Resolver provisioning). The mail names the GROUP (affectedObject_group_name, in group_by so it reaches the mail body) and lists the affected accounts in the backlog; it cannot name who made the change - see the header"
+    },
+    "remediation_steps": {
+     "@type": "string",
+     "@value": ""
+    },
+    "updated_at": "2026-10-21T11:11:42.023Z",
+    "matched_at": null,
+    "priority": {
+     "@type": "integer",
+     "@value": 2
+    },
+    "alert": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "config": {
+     "type": "aggregation-v1",
+     "query": {
+      "@type": "string",
+      "@value": "source:(jira OR confluence) AND summary:(\"User added to group\" OR \"User removed from group\") AND NOT affectedObject_group_name:\"atlassian-addons\""
+     },
+     "query_parameters": [],
+     "filters": [],
+     "streams": [
+      "f217417d-ce54-48bf-b477-fe810464e3d6"
+     ],
+     "stream_categories": [],
+     "group_by": [
+      "source",
+      "summary",
+      "affectedObject_group_name"
+     ],
+     "series": [
+      {
+       "type": "count",
+       "id": "count-0",
+       "field": "source"
+      }
+     ],
+     "conditions": {
+      "expression": {
+       "expr": ">",
+       "left": {
+        "expr": "number-ref",
+        "ref": "count-0"
+       },
+       "right": {
+        "expr": "number",
+        "value": 0.0
+       }
+      }
+     },
+     "search_within_ms": 3600000,
+     "execute_every_ms": 300000,
+     "use_cron_scheduling": false,
+     "cron_expression": null,
+     "cron_timezone": null,
+     "event_limit": 100
+    },
+    "field_spec": {
+     "affectedObject_group_name": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.affectedObject_group_name}",
+        "require_values": false,
+        "exclude_empty_fields": true
+       }
+      ]
+     },
+     "source": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.source}",
+        "require_values": true,
+        "exclude_empty_fields": true
+       }
+      ]
+     },
+     "summary": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.summary}",
+        "require_values": false,
+        "exclude_empty_fields": true
+       }
+      ]
+     }
+    },
+    "key_spec": [
+     "source",
+     "summary",
+     "affectedObject_group_name"
+    ],
+    "notification_settings": {
+     "grace_period_ms": 43200000,
+     "backlog_size": 10
+    },
+    "notifications": [
+     {
+      "notification_id": {
+       "@type": "string",
+       "@value": "cb7b29ea-eb61-4af1-a9bc-be02fd37ab12"
+      },
+      "notification_parameters": null
+     }
+    ],
+    "storage": [
+     {
+      "type": "persist-to-streams-v1",
+      "streams": [
+       "000000000000000000000002"
+      ]
+     }
+    ],
+    "tags": [],
+    "is_scheduled": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "event_procedure": null,
+    "event_summary_template": null,
+    "tactics_techniques": []
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  },
+  {
+   "id": "cb7b29ea-eb61-4af1-a9bc-be02fd37ab12",
+   "type": {
+    "name": "notification",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "title": {
+     "@type": "string",
+     "@value": "Mail"
+    },
+    "description": {
+     "@type": "string",
+     "@value": ""
+    },
+    "config": {
+     "type": "email-notification-v1",
+     "sender": {
+      "@type": "string",
+      "@value": ""
+     },
+     "replyTo": {
+      "@type": "string",
+      "@value": ""
+     },
+     "subject": {
+      "@type": "string",
+      "@value": "Graylog event notification: ${event_definition_title}"
+     },
+     "body_template": {
+      "@type": "string",
+      "@value": "--- [Event Definition] ---------------------------\nTitle:       ${event_definition_title}\nDescription: ${event_definition_description}\nType:        ${event_definition_type}\n--- [Event] --------------------------------------\nAlert Replay:         ${http_external_uri}alerts/${event.id}/replay-search\nTimestamp:            ${event.timestamp}\nMessage:              ${event.message}\nSource:               ${event.source}\nKey:                  ${event.key}\nPriority:             ${event.priority}\nAlert:                ${event.alert}\nTimestamp Processing: ${event.timestamp}\nTimerange Start:      ${event.timerange_start}\nTimerange End:        ${event.timerange_end}\nFields:\n${foreach event.fields field}  ${field.key}: ${field.value}\n${end}\n${if backlog}\n--- [What happened] ------------------------------\n${foreach backlog message}\n${if message.fields.Operation}  ${message.fields.Operation}  by  ${message.fields.UserId}\n${end}${if message.fields.ObjectId}      Target:        ${message.fields.ObjectId}\n${end}${if message.fields.DisplayName_NewValue}      Name:          ${message.fields.DisplayName_NewValue}\n${end}${if message.fields.Target_Name}      Target name:   ${message.fields.Target_Name}\n${end}${if message.fields.AppId_NewValue}      App ID:        ${message.fields.AppId_NewValue}\n${end}${if message.fields.Role_DisplayName_NewValue}      Role:          ${message.fields.Role_DisplayName_NewValue}\n${end}${if message.fields.AppRole_Value_NewValue}      Permission:    ${message.fields.AppRole_Value_NewValue}\n${end}${if message.fields.ConsentContext_IsAdminConsent_NewValue}      Admin consent: ${message.fields.ConsentContext_IsAdminConsent_NewValue}\n${end}${if message.fields.Name}      Rule name:     ${message.fields.Name}\n${end}${if message.fields.ForwardTo}      Forward to:    ${message.fields.ForwardTo}\n${end}${if message.fields.RedirectTo}      Redirect to (rule): ${message.fields.RedirectTo}\n${end}${if message.fields.ForwardAsAttachmentTo}      Forward as attach: ${message.fields.ForwardAsAttachmentTo}\n${end}${if message.fields.ForwardingSmtpAddress}      Mailbox forward: ${message.fields.ForwardingSmtpAddress}\n${end}${if message.fields.ForwardingAddress}      Mailbox forward 2: ${message.fields.ForwardingAddress}\n${end}${if message.fields.MoveToFolder}      Move to folder: ${message.fields.MoveToFolder}\n${end}${if message.fields.From}      Rule condition: ${message.fields.From}\n${end}${if message.fields.CopyTo}      Copy to:       ${message.fields.CopyTo}\n${end}${if message.fields.BlindCopyTo}      Bcc to:        ${message.fields.BlindCopyTo}\n${end}${if message.fields.RedirectMessageTo}      Redirect to:   ${message.fields.RedirectMessageTo}\n${end}${if message.fields.Identity}      Mailbox:       ${message.fields.Identity}\n${end}${if message.fields.AuditBypassEnabled}      Audit bypass:  ${message.fields.AuditBypassEnabled}\n${end}${if message.fields.ClientIP}      Client IP:     ${message.fields.ClientIP}\n${end}${if message.fields.ClientIP_country_code}      Country:       ${message.fields.ClientIP_country_code}\n${end}${if message.fields.ClientIP_city_name}      City:          ${message.fields.ClientIP_city_name}\n${end}${if message.fields.SiteUrl}      Site:          ${message.fields.SiteUrl}\n${end}${if message.fields.SourceFileName}      File:          ${message.fields.SourceFileName}\n${end}${if message.fields.additionalDetails_User_Agent}      User agent:    ${message.fields.additionalDetails_User_Agent}\n${end}${if message.fields.ResultStatus}      Result:        ${message.fields.ResultStatus}\n${end}${end}\n${end}\n${if backlog}\n--- [Backlog] ------------------------------------\nLast messages accounting for this alert:\n${foreach backlog message}\n${message}\n${end}\n${end}\n"
+     },
+     "html_body_template": {
+      "@type": "string",
+      "@value": "<table width=\"100%\" border=\"0\" cellpadding=\"10\" cellspacing=\"0\" style=\"background-color:#f9f9f9;border:none;line-height:1.2\"><tbody>\n<tr style=\"line-height:1.5\"><th colspan=\"2\" style=\"background-color:#e6e6e6\">Event Definition</th></tr>\n<tr><td width=\"200px\">Title</td><td>${event_definition_title}</td></tr>\n<tr><td>Description</td><td>${event_definition_description}</td></tr>\n<tr><td>Type</td><td>${event_definition_type}</td></tr>\n</tbody></table>\n<br /><table width=\"100%\" border=\"0\" cellpadding=\"10\" cellspacing=\"0\" style=\"background-color:#f9f9f9;border:none;line-height:1.2\"><tbody>\n<tr><th colspan=\"2\" style=\"background-color:#e6e6e6;line-height:1.5\">Event</th></tr>\n<tr><td>Alert Replay</td><td>${http_external_uri}alerts/${event.id}/replay-search</td></tr>\n<tr><td width=\"200px\">Timestamp</td><td>${event.timestamp}</td></tr>\n<tr><td>Message</td><td>${event.message}</td></tr>\n<tr><td>Source</td><td>${event.source}</td></tr>\n<tr><td>Key</td><td>${event.key}</td></tr>\n<tr><td>Priority</td><td>${event.priority}</td></tr>\n<tr><td>Alert</td><td>${event.alert}</td></tr>\n<tr><td>Timestamp Processing</td><td>${event.timestamp}</td></tr>\n<tr><td>Timerange Start</td><td>${event.timerange_start}</td></tr>\n<tr><td>Timerange End</td><td>${event.timerange_end}</td></tr>\n<tr><td>Source Streams</td><td>${event.source_streams}</td></tr>\n<tr><td>Fields</td><td><ul style=\"list-style-type:square;\">${foreach event.fields field}<li>${field.key}:${field.value}</li>${end}<ul></td></tr>\n</tbody></table>\n${if backlog}\n<br /><table width=\"100%\" border=\"0\" cellpadding=\"10\" cellspacing=\"0\" style=\"background-color:#f9f9f9;border:none;line-height:1.2\"><tbody>\n<tr><th colspan=\"2\" style=\"background-color:#e6e6e6;line-height:1.5\">What happened</th></tr>\n${foreach backlog message}\n${if message.fields.Operation}<tr><td colspan=\"2\" style=\"background-color:#efefef\"><b>${message.fields.Operation}</b> by ${message.fields.UserId}</td></tr>${end}\n${if message.fields.ObjectId}<tr><td width=\"200px\">Target</td><td>${message.fields.ObjectId}</td></tr>${end}\n${if message.fields.DisplayName_NewValue}<tr><td width=\"200px\">Name</td><td>${message.fields.DisplayName_NewValue}</td></tr>${end}\n${if message.fields.Target_Name}<tr><td width=\"200px\">Target name</td><td>${message.fields.Target_Name}</td></tr>${end}\n${if message.fields.AppId_NewValue}<tr><td width=\"200px\">App ID</td><td>${message.fields.AppId_NewValue}</td></tr>${end}\n${if message.fields.Role_DisplayName_NewValue}<tr><td width=\"200px\">Role</td><td>${message.fields.Role_DisplayName_NewValue}</td></tr>${end}\n${if message.fields.AppRole_Value_NewValue}<tr><td width=\"200px\">Permission</td><td>${message.fields.AppRole_Value_NewValue}</td></tr>${end}\n${if message.fields.ConsentContext_IsAdminConsent_NewValue}<tr><td width=\"200px\">Admin consent</td><td>${message.fields.ConsentContext_IsAdminConsent_NewValue}</td></tr>${end}\n${if message.fields.Name}<tr><td width=\"200px\">Rule name</td><td>${message.fields.Name}</td></tr>${end}\n${if message.fields.ForwardTo}<tr><td width=\"200px\">Forward to</td><td>${message.fields.ForwardTo}</td></tr>${end}\n${if message.fields.RedirectTo}<tr><td width=\"200px\">Redirect to (rule)</td><td>${message.fields.RedirectTo}</td></tr>${end}\n${if message.fields.ForwardAsAttachmentTo}<tr><td width=\"200px\">Forward as attach</td><td>${message.fields.ForwardAsAttachmentTo}</td></tr>${end}\n${if message.fields.ForwardingSmtpAddress}<tr><td width=\"200px\">Mailbox forward</td><td>${message.fields.ForwardingSmtpAddress}</td></tr>${end}\n${if message.fields.ForwardingAddress}<tr><td width=\"200px\">Mailbox forward 2</td><td>${message.fields.ForwardingAddress}</td></tr>${end}\n${if message.fields.MoveToFolder}<tr><td width=\"200px\">Move to folder</td><td>${message.fields.MoveToFolder}</td></tr>${end}\n${if message.fields.From}<tr><td width=\"200px\">Rule condition</td><td>${message.fields.From}</td></tr>${end}\n${if message.fields.CopyTo}<tr><td width=\"200px\">Copy to</td><td>${message.fields.CopyTo}</td></tr>${end}\n${if message.fields.BlindCopyTo}<tr><td width=\"200px\">Bcc to</td><td>${message.fields.BlindCopyTo}</td></tr>${end}\n${if message.fields.RedirectMessageTo}<tr><td width=\"200px\">Redirect to</td><td>${message.fields.RedirectMessageTo}</td></tr>${end}\n${if message.fields.Identity}<tr><td width=\"200px\">Mailbox</td><td>${message.fields.Identity}</td></tr>${end}\n${if message.fields.AuditBypassEnabled}<tr><td width=\"200px\">Audit bypass</td><td>${message.fields.AuditBypassEnabled}</td></tr>${end}\n${if message.fields.ClientIP}<tr><td width=\"200px\">Client IP</td><td>${message.fields.ClientIP}</td></tr>${end}\n${if message.fields.ClientIP_country_code}<tr><td width=\"200px\">Country</td><td>${message.fields.ClientIP_country_code}</td></tr>${end}\n${if message.fields.ClientIP_city_name}<tr><td width=\"200px\">City</td><td>${message.fields.ClientIP_city_name}</td></tr>${end}\n${if message.fields.SiteUrl}<tr><td width=\"200px\">Site</td><td>${message.fields.SiteUrl}</td></tr>${end}\n${if message.fields.SourceFileName}<tr><td width=\"200px\">File</td><td>${message.fields.SourceFileName}</td></tr>${end}\n${if message.fields.additionalDetails_User_Agent}<tr><td width=\"200px\">User agent</td><td>${message.fields.additionalDetails_User_Agent}</td></tr>${end}\n${if message.fields.ResultStatus}<tr><td width=\"200px\">Result</td><td>${message.fields.ResultStatus}</td></tr>${end}\n${end}\n</tbody></table>\n${end}\n${if backlog}\n<br /><table width=\"100%\" border=\"0\" cellpadding=\"10\" cellspacing=\"0\" style=\"background-color:#f9f9f9;border:none;line-height:1.2\"><tbody>\n<tr><th style=\"background-color:#e6e6e6;line-height:1.5\">Backlog (Last messages accounting for this alert)</th></tr>\n${foreach backlog message}\n<tr><td>${message}</td></tr>\n${end}\n</tbody></table>\n${end}\n"
+     },
+     "email_recipients": [],
+     "user_recipients": [],
+     "time_zone": {
+      "@type": "string",
+      "@value": "UTC"
+     },
+     "lookup_recipient_emails": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "recipients_lut_name": {
+      "@type": "string",
+      "@value": ""
+     },
+     "recipients_lut_key": {
+      "@type": "string",
+      "@value": ""
+     },
+     "lookup_sender_email": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "sender_lut_name": {
+      "@type": "string",
+      "@value": ""
+     },
+     "sender_lut_key": {
+      "@type": "string",
+      "@value": ""
+     },
+     "lookup_reply_to_email": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "reply_to_lut_name": {
+      "@type": "string",
+      "@value": ""
+     },
+     "reply_to_lut_key": {
+      "@type": "string",
+      "@value": ""
+     },
+     "single_email": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "cc_users": [],
+     "cc_emails": [],
+     "lookup_cc_emails": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "cc_emails_lut_name": {
+      "@type": "string",
+      "@value": ""
+     },
+     "cc_emails_lut_key": {
+      "@type": "string",
+      "@value": ""
+     },
+     "bcc_users": [],
+     "bcc_emails": [],
+     "lookup_bcc_emails": {
+      "@type": "boolean",
+      "@value": false
+     },
+     "bcc_emails_lut_name": {
+      "@type": "string",
+      "@value": ""
+     },
+     "bcc_emails_lut_key": {
+      "@type": "string",
+      "@value": ""
+     },
+     "include_event_procedures": {
+      "@type": "boolean",
+      "@value": false
+     }
+    }
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  },
+  {
+   "id": "0e6dea10-a0fe-47ed-b60f-8caa1448241b",
+   "type": {
+    "name": "event_definition",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "_scope": {
+     "@type": "string",
+     "@value": "DEFAULT"
+    },
+    "title": {
+     "@type": "string",
+     "@value": "Atlassian - privileged configuration change"
+    },
+    "description": {
+     "@type": "string",
+     "@value": "Baseline: 360 real events/400d on 32 days, ~6/week"
+    },
+    "remediation_steps": {
+     "@type": "string",
+     "@value": ""
+    },
+    "updated_at": "2026-10-21T11:11:42.050Z",
+    "matched_at": null,
+    "priority": {
+     "@type": "integer",
+     "@value": 3
+    },
+    "alert": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "config": {
+     "type": "aggregation-v1",
+     "query": {
+      "@type": "string",
+      "@value": "source:(jira OR confluence) AND summary:(\"Group created\" OR \"Group deleted\" OR \"Space created\" OR \"Space permission removed\" OR \"Space role assignment set\" OR \"Space role assignment removed\" OR \"RBAC mode enabled\" OR \"Space owner updated\" OR \"Project deleted\" OR \"Content restriction added\")"
+     },
+     "query_parameters": [],
+     "filters": [],
+     "streams": [
+      "f217417d-ce54-48bf-b477-fe810464e3d6"
+     ],
+     "stream_categories": [],
+     "group_by": [
+      "source",
+      "summary"
+     ],
+     "series": [
+      {
+       "type": "count",
+       "id": "count-0",
+       "field": "source"
+      }
+     ],
+     "conditions": {
+      "expression": {
+       "expr": ">",
+       "left": {
+        "expr": "number-ref",
+        "ref": "count-0"
+       },
+       "right": {
+        "expr": "number",
+        "value": 0.0
+       }
+      }
+     },
+     "search_within_ms": 3600000,
+     "execute_every_ms": 300000,
+     "use_cron_scheduling": false,
+     "cron_expression": null,
+     "cron_timezone": null,
+     "event_limit": 100
+    },
+    "field_spec": {
+     "source": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.source}",
+        "require_values": true,
+        "exclude_empty_fields": true
+       }
+      ]
+     },
+     "summary": {
+      "data_type": "string",
+      "providers": [
+       {
+        "type": "template-v1",
+        "template": "${source.summary}",
+        "require_values": false,
+        "exclude_empty_fields": true
+       }
+      ]
+     }
+    },
+    "key_spec": [
+     "source",
+     "summary"
+    ],
+    "notification_settings": {
+     "grace_period_ms": 43200000,
+     "backlog_size": 10
+    },
+    "notifications": [
+     {
+      "notification_id": {
+       "@type": "string",
+       "@value": "cb7b29ea-eb61-4af1-a9bc-be02fd37ab12"
+      },
+      "notification_parameters": null
+     }
+    ],
+    "storage": [
+     {
+      "type": "persist-to-streams-v1",
+      "streams": [
+       "000000000000000000000002"
+      ]
+     }
+    ],
+    "tags": [],
+    "is_scheduled": {
+     "@type": "boolean",
+     "@value": true
+    },
+    "event_procedure": null,
+    "event_summary_template": null,
+    "tactics_techniques": []
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  },
+  {
+   "id": "f217417d-ce54-48bf-b477-fe810464e3d6",
+   "type": {
+    "name": "stream_title",
+    "version": "1"
+   },
+   "v": "1",
+   "data": {
+    "title": {
+     "@type": "string",
+     "@value": "GELF-UDP"
+    }
+   },
+   "constraints": [
+    {
+     "type": "server-version",
+     "version": ">=7.2.0+8c9a833"
+    }
+   ]
+  }
+ ]
+}
